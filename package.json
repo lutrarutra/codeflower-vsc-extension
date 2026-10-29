@@ -227,7 +227,7 @@
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "2.1.0",
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.6.5",
     "@types/vscode": "^1.100.0",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.28.2",
