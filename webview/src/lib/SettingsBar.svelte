@@ -16,13 +16,14 @@
   const effort = $derived(byCategory('thought_level'));
   const extras = $derived(options.filter((option) => !['mode', 'model', 'thought_level'].includes(option.category ?? '')));
 
-  // Claude Code's modes; other agents' modes get the neutral look.
+  // Claude Code's modes; other agents' modes get the neutral look. Skipping
+  // permission prompts is a normal choice here: the agent runs in the sandbox.
   const modeLook: Record<string, [string, string]> = {
     default: ['shield', ''],
     acceptEdits: ['edit', 'bg-teal-soft!'],
     plan: ['checklist', 'bg-violet-soft!'],
     auto: ['sparkle', 'bg-indigo-soft!'],
-    bypassPermissions: ['warning', 'bg-pink-soft!']
+    bypassPermissions: ['package', 'bg-green-soft!']
   };
 
   const on = (option: SessionConfigOption) =>

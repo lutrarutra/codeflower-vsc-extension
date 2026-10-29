@@ -28,6 +28,7 @@
   --cf-orange: #ed9e4b;
   --cf-red: #e5483b;
   --cf-green: #3a9d4b;
+  --cf-green-soft: #dcf1d8;
   --cf-violet: #8b5cf6;
   --cf-violet-soft: #ece4ff;
   --cf-cyan: #0f8fb0;
@@ -60,6 +61,7 @@ body.vscode-dark {
   --cf-yellow-soft: #352f1e;
   --cf-orange: #f2a65a;
   --cf-green: #6cc77b;
+  --cf-green-soft: #1f3522;
   --cf-red: #f07167;
   --cf-violet: #a98bff;
   --cf-violet-soft: #2f2846;
@@ -82,6 +84,7 @@ body.vscode-high-contrast-light {
   --cf-indigo: var(--vscode-button-background);
   --cf-indigo-soft: var(--vscode-editor-background);
   --cf-teal-soft: var(--vscode-editor-background);
+  --cf-green-soft: var(--vscode-editor-background);
   --cf-pink-soft: var(--vscode-editor-background);
   --cf-yellow-soft: var(--vscode-editor-background);
   --cf-violet-soft: var(--vscode-editor-background);
@@ -111,6 +114,7 @@ body.vscode-high-contrast-light {
   --color-orange: var(--cf-orange);
   --color-red: var(--cf-red);
   --color-green: var(--cf-green);
+  --color-green-soft: var(--cf-green-soft);
   --color-violet: var(--cf-violet);
   --color-violet-soft: var(--cf-violet-soft);
   --color-cyan: var(--cf-cyan);
@@ -255,6 +259,13 @@ textarea:focus-visible {
   color: var(--cf-ink);
   cursor: pointer;
   white-space: nowrap;
+}
+
+/* Codicons are 16px glyphs; in a chip they match its smaller text and sit on
+   no line box of their own, so the flex row centres the glyph itself. */
+.chip .codicon {
+  font-size: 13px;
+  line-height: 1;
 }
 
 .chip:hover {

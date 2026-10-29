@@ -7,7 +7,8 @@ import type { WorkerEntry, WorkerManager } from './workers.ts';
 const MOUNT_GROUPS = [
   { root: '/data/input', label: 'Inputs', icon: 'database' },
   { root: '/data/output', label: 'Outputs', icon: 'output' },
-  { root: '/data/code', label: 'Code', icon: 'code' }
+  { root: '/data/code', label: 'Code', icon: 'code' },
+  { root: '/data/skills', label: 'Skills', icon: 'lightbulb' }
 ];
 
 /** Single folders mounted by workers from before /data. */
@@ -67,7 +68,7 @@ const statusLook: Record<SessionStatus, [string, string, string]> = {
   waiting: ['bell-dot', 'charts.orange', 'needs you'],
   working: ['loading~spin', 'charts.blue', 'working'],
   ready: ['comment-discussion', 'charts.green', ''],
-  offline: ['comment-discussion', 'disabledForeground', '']
+  offline: ['debug-disconnect', 'charts.red', 'not connected']
 };
 
 export interface SessionStatuses {
