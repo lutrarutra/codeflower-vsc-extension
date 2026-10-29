@@ -9,7 +9,8 @@ import {
   type SessionRecord,
   type ShowRequest,
   type UrlElicitation,
-  type WorkerStatus
+  type WorkerStatus,
+  type WrapUpNotice
 } from './workerConnection.ts';
 
 const WORKERS_SECRET = 'codeflower.workers';
@@ -165,6 +166,18 @@ export class WorkerManager implements vscode.Disposable {
     }
   }
 
+  private warnWrapUp(entry: WorkerEntry, notice: WrapUpNotice): void {
+    const label = entry.status?.agentLabel ?? 'Worker';
+    const end = new Date(notice.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const chats =
+      notice.chats === 0
+        ? 'No chat was working.'
+        : `${notice.chats === 1 ? 'Its working chat was' : `Its ${notice.chats} working chats were`} stopped and asked to save their work and write up where they are.`;
+    void vscode.window.showWarningMessage(
+      `${label} on ${entry.id}: the job ends at ${end}, in about ${notice.minutes} minutes, and the sandbox stops with it. ${chats}`
+    );
+  }
+
   private setUsage(entry: WorkerEntry, usage: WorkerUsage): void {
     entry.usage = usage;
     this.router.usage(entry.id, usage);
@@ -202,6 +215,7 @@ export class WorkerManager implements vscode.Disposable {
               if (entry.connection !== connection) return;
               this.setUsage(entry, usage);
             },
+            wrapUp: (notice) => this.warnWrapUp(entry, notice),
             closed: (reason, code) => {
               if (entry.connection !== connection) return;
               entry.connection = undefined;

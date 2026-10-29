@@ -231,7 +231,10 @@ export class WorkerTree implements vscode.TreeDataProvider<TreeNode> {
     item.id = `worker:${worker.id}`;
     const usage = worker.usage;
     const summary = usage ? usageSummary(usage, usage.totals) : '';
-    item.description = [worker.id, worker.status?.slurmJobId ? `job ${worker.status.slurmJobId}` : '', summary]
+    const end = worker.status?.allocationEnd
+      ? `until ${new Date(worker.status.allocationEnd).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+      : '';
+    item.description = [worker.id, worker.status?.slurmJobId ? `job ${worker.status.slurmJobId}` : '', end, summary]
       .filter(Boolean)
       .join(' · ');
     item.tooltip = new vscode.MarkdownString(

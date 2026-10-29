@@ -96,6 +96,8 @@ export interface WorkerStatus {
   stateDirectory: string | null;
   engine: string;
   slurmJobId?: string;
+  /** When the batch job ends (ISO 8601); chats are asked to wrap up before. Missing without a known end. */
+  allocationEnd?: string;
   /** Folders the launcher mounted, e.g. /data/input/study42; missing from older workers. */
   mounts?: Mount[];
 }
@@ -118,6 +120,14 @@ export interface SessionRecord {
   openOn?: string;
   /** The session's tokens and cost so far; missing from older workers. */
   usage?: UsageTotals | null;
+}
+
+/** The batch job ends soon: the worker stopped the chats with a turn running and asked them to wrap up. */
+export interface WrapUpNotice {
+  end: string;
+  minutes: number;
+  /** How many chats were asked to wrap up. */
+  chats: number;
 }
 
 /** A URL the agent asks the user to open, e.g. a device-code sign-in. */
@@ -144,6 +154,7 @@ export interface WorkerHandlers {
   terminalExit(terminalId: string, exitCode: number): void;
   /** Token counts, cost, or the login's quota changed. */
   usage(usage: WorkerUsage): void;
+  wrapUp(notice: WrapUpNotice): void;
   closed(reason: string, code: number): void;
 }
 
@@ -433,13 +444,18 @@ export class WorkerConnection {
   cancel(key: string): void {
     const sessionId = this.sessions.get(key);
     if (!sessionId) return;
+    this.dropPending(key);
+    this.client.notify('session/cancel', { sessionId });
+  }
+
+  /** Answers the chat's open permission requests and questions as cancelled. */
+  private dropPending(key: string): void {
     for (const [requestId, pending] of this.permissions) {
       if (pending.sessionKey === key) this.answerPermission(requestId, null);
     }
     for (const [requestId, pending] of this.questions) {
       if (pending.sessionKey === key) this.answerQuestion(requestId, 'cancel', null);
     }
-    this.client.notify('session/cancel', { sessionId });
   }
 
   answerPermission(requestId: number, optionId: string | null): void {
@@ -610,6 +626,17 @@ export class WorkerConnection {
       case '_codeflower/usage':
         this.handlers.usage(params as WorkerUsage);
         break;
+      case '_codeflower/wrapUp': {
+        const { key, prompt, ...notice } = params as WrapUpNotice & { key?: string; prompt?: string };
+        if (key === undefined) {
+          this.handlers.wrapUp(notice);
+          break;
+        }
+        // The worker answered the chat's requests itself and prompts it; the chat shows the prompt.
+        this.dropPending(key);
+        if (prompt) this.handlers.entry(key, { t: now(), kind: 'prompt', prompt: [{ type: 'text', text: prompt }] });
+        break;
+      }
       case 'elicitation/complete':
         this.handlers.elicitationComplete(String((params as { elicitationId?: unknown }).elicitationId ?? ''));
         break;
