@@ -1,0 +1,474 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/fredoka/wght.css';
+@import '@fontsource-variable/dm-sans/wght.css';
+@import '@vscode/codicons/dist/codicon.css';
+
+/* The code flower look (codeflower.dev): paper and ink, bold outlines with
+   hard offset shadows, pill buttons, and a playful palette. Light themes get
+   the paper, dark themes a deep ink, and high-contrast themes fall back to
+   the theme's own colors without decoration. */
+:root {
+  --cf-paper: #f6efd9;
+  --cf-card: #fffaf0;
+  --cf-ink: #1d1d1f;
+  --cf-muted: #6b5d45;
+  --cf-line: #1d1d1f;
+  --cf-soft-line: #e3d8bd;
+  --cf-shadow: #1d1d1f;
+  --cf-code: #efe5c9;
+
+  --cf-indigo: #4f46e5;
+  --cf-indigo-soft: #e4e1ff;
+  --cf-teal: #0f9d8a;
+  --cf-teal-soft: #d3f1eb;
+  --cf-pink: #e8668f;
+  --cf-pink-soft: #fde1ea;
+  --cf-yellow: #ffcf3f;
+  --cf-yellow-soft: #fff1c2;
+  --cf-orange: #ed9e4b;
+  --cf-red: #e5483b;
+  --cf-green: #3a9d4b;
+  --cf-violet: #8b5cf6;
+  --cf-violet-soft: #ece4ff;
+  --cf-cyan: #0f8fb0;
+  --cf-on-accent: #ffffff;
+
+  --cf-border-width: 2px;
+  --cf-lift: 3px;
+}
+
+/* Dark themes are not the paper look inverted: ink outlines and hard
+   shadows turn into heavy cream borders on a dark page. Here surfaces are
+   warm charcoal, borders thin and quiet, and color comes from fills. */
+body.vscode-dark {
+  --cf-paper: #1c1b21;
+  --cf-card: #25242c;
+  --cf-ink: #ece6d6;
+  --cf-muted: #a19a8b;
+  --cf-line: #45424f;
+  --cf-soft-line: #34323c;
+  --cf-shadow: transparent;
+  --cf-code: #2c2a33;
+
+  --cf-indigo: #7f78ff;
+  --cf-indigo-soft: #2b2946;
+  --cf-teal: #3cc9b4;
+  --cf-teal-soft: #1b3533;
+  --cf-pink: #f08cab;
+  --cf-pink-soft: #3d2530;
+  --cf-yellow: #ffd75e;
+  --cf-yellow-soft: #352f1e;
+  --cf-orange: #f2a65a;
+  --cf-green: #6cc77b;
+  --cf-red: #f07167;
+  --cf-violet: #a98bff;
+  --cf-violet-soft: #2f2846;
+  --cf-cyan: #5fd6f5;
+
+  --cf-border-width: 1px;
+  --cf-lift: 0px;
+}
+
+body.vscode-high-contrast,
+body.vscode-high-contrast-light {
+  --cf-paper: var(--vscode-editor-background);
+  --cf-card: var(--vscode-editor-background);
+  --cf-ink: var(--vscode-foreground);
+  --cf-muted: var(--vscode-descriptionForeground);
+  --cf-line: var(--vscode-contrastBorder, var(--vscode-foreground));
+  --cf-soft-line: var(--vscode-contrastBorder, var(--vscode-foreground));
+  --cf-shadow: transparent;
+  --cf-code: var(--vscode-editor-background);
+  --cf-indigo: var(--vscode-button-background);
+  --cf-indigo-soft: var(--vscode-editor-background);
+  --cf-teal-soft: var(--vscode-editor-background);
+  --cf-pink-soft: var(--vscode-editor-background);
+  --cf-yellow-soft: var(--vscode-editor-background);
+  --cf-violet-soft: var(--vscode-editor-background);
+  --cf-on-accent: var(--vscode-button-foreground);
+  --cf-lift: 0px;
+}
+
+@theme inline {
+  --font-sans: 'DM Sans Variable', var(--vscode-font-family), ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Fredoka Variable', 'Trebuchet MS', sans-serif;
+  --font-mono: var(--vscode-editor-font-family), ui-monospace, monospace;
+  --color-paper: var(--cf-paper);
+  --color-card: var(--cf-card);
+  --color-ink: var(--cf-ink);
+  --color-muted: var(--cf-muted);
+  --color-line: var(--cf-line);
+  --color-soft-line: var(--cf-soft-line);
+  --color-code: var(--cf-code);
+  --color-indigo: var(--cf-indigo);
+  --color-indigo-soft: var(--cf-indigo-soft);
+  --color-teal: var(--cf-teal);
+  --color-teal-soft: var(--cf-teal-soft);
+  --color-pink: var(--cf-pink);
+  --color-pink-soft: var(--cf-pink-soft);
+  --color-yellow: var(--cf-yellow);
+  --color-yellow-soft: var(--cf-yellow-soft);
+  --color-orange: var(--cf-orange);
+  --color-red: var(--cf-red);
+  --color-green: var(--cf-green);
+  --color-violet: var(--cf-violet);
+  --color-violet-soft: var(--cf-violet-soft);
+  --color-cyan: var(--cf-cyan);
+  --color-on-accent: var(--cf-on-accent);
+  --color-focus: var(--vscode-focusBorder);
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--cf-paper);
+  color: var(--cf-ink);
+  font-family: var(--font-sans);
+  font-size: calc(var(--vscode-font-size, 13px) + 1px);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  height: 100%;
+}
+
+button,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* The composer card shows focus itself. */
+textarea:focus,
+textarea:focus-visible {
+  outline: none;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--cf-soft-line);
+  border: 3px solid var(--cf-paper);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--cf-muted);
+}
+
+/* An outlined surface with the brand's hard shadow. */
+.card {
+  background: var(--cf-card);
+  border: var(--cf-border-width) solid var(--cf-line);
+  border-radius: 16px;
+  box-shadow: var(--cf-lift) var(--cf-lift) 0 var(--cf-shadow);
+}
+
+.eyebrow {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: var(--cf-border-width) solid var(--cf-line);
+  border-radius: 999px;
+  padding: 0.3rem 0.95rem;
+  font-weight: 600;
+  line-height: 1.3;
+  cursor: pointer;
+  background: var(--cf-card);
+  color: var(--cf-ink);
+  box-shadow: 2px 2px 0 var(--cf-shadow);
+  transition:
+    transform 80ms ease,
+    box-shadow 80ms ease;
+}
+
+.pill:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 var(--cf-shadow);
+}
+
+.pill:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 0 0 0 var(--cf-shadow);
+}
+
+.pill:disabled {
+  opacity: 0.45;
+  cursor: default;
+  box-shadow: none;
+}
+
+.pill-primary {
+  background: var(--cf-indigo);
+  color: var(--cf-on-accent);
+}
+
+.pill-teal {
+  background: var(--cf-teal);
+  color: var(--cf-on-accent);
+}
+
+.pill-pink {
+  background: var(--cf-pink);
+  color: var(--cf-on-accent);
+}
+
+.pill-small {
+  padding: 0.15rem 0.7rem;
+  font-size: 0.85em;
+}
+
+/* A small selector button in the composer's settings row. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1.5px solid var(--cf-soft-line);
+  border-radius: 999px;
+  padding: 0.1rem 0.6rem;
+  font-size: 0.85em;
+  font-weight: 600;
+  line-height: 1.5;
+  background: var(--cf-card);
+  color: var(--cf-ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chip:hover {
+  border-color: var(--cf-line);
+}
+
+.chip[aria-expanded='true'] {
+  border-color: var(--cf-line);
+  box-shadow: 2px 2px 0 var(--cf-shadow);
+}
+
+.link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--cf-muted);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.link:hover {
+  color: var(--cf-ink);
+  text-decoration: underline;
+}
+
+body.vscode-dark .card {
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.25);
+}
+
+/* Filled buttons and the user's bubble carry their color without an outline. */
+body.vscode-dark .pill-primary,
+body.vscode-dark .pill-teal,
+body.vscode-dark .pill-pink,
+body.vscode-dark .bubble-user {
+  border-color: transparent;
+}
+
+body.vscode-dark .pill-primary,
+body.vscode-dark .bubble-user {
+  background: #5b54e8;
+}
+
+body.vscode-dark .pill:hover:not(:disabled) {
+  transform: none;
+  filter: brightness(1.12);
+}
+
+body.vscode-dark .pill-teal,
+body.vscode-dark .pill-pink {
+  color: #1c1b21;
+}
+
+body.vscode-dark .chip[aria-expanded='true'] {
+  border-color: var(--cf-indigo);
+}
+
+/* Agent replies are markdown. */
+.prose > :first-child {
+  margin-top: 0;
+}
+
+.prose > :last-child {
+  margin-bottom: 0;
+}
+
+.prose p,
+.prose ul,
+.prose ol,
+.prose pre,
+.prose blockquote,
+.prose table {
+  margin: 0 0 0.7em;
+}
+
+.prose ul,
+.prose ol {
+  padding-left: 1.4em;
+}
+
+.prose ul {
+  list-style: disc;
+}
+
+.prose ol {
+  list-style: decimal;
+}
+
+.prose li::marker {
+  color: var(--cf-indigo);
+}
+
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 1em 0 0.4em;
+}
+
+.prose h1 {
+  font-size: 1.35em;
+}
+
+.prose h2 {
+  font-size: 1.2em;
+}
+
+.prose h3,
+.prose h4 {
+  font-size: 1.05em;
+}
+
+.prose a {
+  color: var(--cf-indigo);
+  font-weight: 600;
+}
+
+.prose strong {
+  font-weight: 700;
+}
+
+.prose code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--cf-code);
+  border-radius: 6px;
+  padding: 0.1em 0.35em;
+}
+
+.prose pre {
+  background: var(--cf-code);
+  border: 1.5px solid var(--cf-soft-line);
+  border-radius: 12px;
+  padding: 0.7em 0.9em;
+  overflow-x: auto;
+}
+
+.prose pre code {
+  background: none;
+  padding: 0;
+}
+
+.prose blockquote {
+  border-left: 3px solid var(--cf-yellow);
+  padding-left: 0.8em;
+  color: var(--cf-muted);
+}
+
+.prose table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+
+.prose th,
+.prose td {
+  border: 1.5px solid var(--cf-soft-line);
+  padding: 0.25em 0.6em;
+  text-align: left;
+}
+
+.prose th {
+  background: var(--cf-code);
+}
+
+.prose hr {
+  border: none;
+  border-top: 2px dashed var(--cf-soft-line);
+  margin: 1em 0;
+}
+
+@keyframes cf-bounce {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+  }
+  40% {
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes cf-sway {
+  0%,
+  100% {
+    transform: rotate(-4deg);
+  }
+  50% {
+    transform: rotate(4deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* File paths in agent text open a preview. */
+.prose [data-file] {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.prose [data-file]:hover {
+  color: var(--cf-indigo);
+}
+
+.prose img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}

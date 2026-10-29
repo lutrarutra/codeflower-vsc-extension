@@ -1,0 +1,215 @@
+{
+  "name": "codeflower",
+  "displayName": "code flower",
+  "description": "Chat with sandboxed Claude Code, Codex, and DeepSeek Harness workers on your HPC data.",
+  "publisher": "codeflower",
+  "icon": "media/icon.png",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "main": "./dist/extension.cjs",
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onUri"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codeflower",
+          "title": "code flower",
+          "icon": "media/codeflower.svg"
+        }
+      ]
+    },
+    "views": {
+      "codeflower": [
+        {
+          "id": "codeflower.workers",
+          "name": "Workers"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "codeflower.workers",
+        "contents": "Start a worker with `codeflower run --agent claude|codex|dsh …`, then paste the codeflower:// line it prints.\n[Connect to worker](command:codeflower.connectWorker)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "codeflower.connectWorker",
+        "title": "Connect to worker…",
+        "category": "code flower",
+        "icon": "$(add)"
+      },
+      {
+        "command": "codeflower.refresh",
+        "title": "Refresh",
+        "category": "code flower",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "codeflower.newSession",
+        "title": "New session",
+        "category": "code flower",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "codeflower.signIn",
+        "title": "Sign in…",
+        "category": "code flower",
+        "icon": "$(key)"
+      },
+      {
+        "command": "codeflower.reconnectWorker",
+        "title": "Reconnect",
+        "category": "code flower",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "codeflower.removeWorker",
+        "title": "Remove worker",
+        "category": "code flower",
+        "icon": "$(close)"
+      },
+      {
+        "command": "codeflower.showAttention",
+        "title": "Show the session that needs attention",
+        "category": "code flower"
+      },
+      {
+        "command": "codeflower.openSession",
+        "title": "Open session",
+        "category": "code flower"
+      },
+      {
+        "command": "codeflower.renameSession",
+        "title": "Rename",
+        "category": "code flower",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "codeflower.deleteSession",
+        "title": "Delete",
+        "category": "code flower",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "codeflower.openFile",
+        "title": "Show",
+        "category": "code flower",
+        "icon": "$(eye)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "codeflower.connectWorker",
+          "when": "view == codeflower.workers",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codeflower.refresh",
+          "when": "view == codeflower.workers",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "codeflower.newSession",
+          "when": "view == codeflower.workers && viewItem == worker.connected",
+          "group": "inline@1"
+        },
+        {
+          "command": "codeflower.removeWorker",
+          "when": "view == codeflower.workers && viewItem =~ /^worker/",
+          "group": "inline@3"
+        },
+        {
+          "command": "codeflower.reconnectWorker",
+          "when": "view == codeflower.workers && viewItem == worker.disconnected",
+          "group": "inline@2"
+        },
+        {
+          "command": "codeflower.signIn",
+          "when": "view == codeflower.workers && viewItem == worker.connected",
+          "group": "worker@1"
+        },
+        {
+          "command": "codeflower.reconnectWorker",
+          "when": "view == codeflower.workers && viewItem == worker.connected",
+          "group": "worker@2"
+        },
+        {
+          "command": "codeflower.renameSession",
+          "when": "view == codeflower.workers && viewItem == session",
+          "group": "inline@1"
+        },
+        {
+          "command": "codeflower.deleteSession",
+          "when": "view == codeflower.workers && viewItem == session",
+          "group": "inline@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "codeflower.newSession",
+          "when": "false"
+        },
+        {
+          "command": "codeflower.signIn",
+          "when": "false"
+        },
+        {
+          "command": "codeflower.reconnectWorker",
+          "when": "false"
+        },
+        {
+          "command": "codeflower.removeWorker",
+          "when": "false"
+        },
+        {
+          "command": "codeflower.openSession",
+          "when": "false"
+        },
+        {
+          "command": "codeflower.renameSession",
+          "when": "false"
+        },
+        {
+          "command": "codeflower.deleteSession",
+          "when": "false"
+        },
+        {
+          "command": "codeflower.openFile",
+          "when": "false"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "npm run build:webview && npm run build:extension",
+    "build:extension": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --sourcemap --outfile=dist/extension.cjs",
+    "build:webview": "npm --prefix webview run build",
+    "check": "tsc --noEmit -p .",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@agentclientprotocol/sdk": "2.1.0",
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.100.0",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.3"
+  }
+}
