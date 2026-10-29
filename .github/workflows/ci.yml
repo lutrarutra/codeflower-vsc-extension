@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths: &paths
+      - src/**
+      - shared/**
+      - webview/**
+      - test/**
+      - media/**
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - .vscodeignore
+      - .github/workflows/ci.yml
+  pull_request:
+    paths: *paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Check, test and package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            webview/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix webview ci
+
+      - name: Check types
+        run: |
+          npm --prefix webview run check
+          npm run check
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # esbuild bundles every dependency, so the package needs no node_modules.
+      - name: Package the extension
+        run: npx --yes @vscode/vsce@4.1.0 package --no-dependencies -o codeflower.vsix
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codeflower-vsix
+          path: codeflower.vsix
+          retention-days: 7

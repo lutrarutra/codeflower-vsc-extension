@@ -4,6 +4,14 @@ The VS Code extension of code flower: it connects to code flower workers (sandbo
 [codeflower-launcher](https://github.com/lutrarutra/codeflower-launcher)), lists them with their
 sessions, and opens a chat (a Svelte webview in `webview/`) per session.
 
+## Install
+
+Download `codeflower-<version>.vsix` from the
+[releases](https://github.com/lutrarutra/codeflower-vsc-extension/releases) and install it with
+*Extensions → ⋯ → Install from VSIX…*, or `code --install-extension codeflower-<version>.vsix`.
+
+## Development
+
 ```sh
 npm ci && npm --prefix webview ci
 npm run check   # TypeScript

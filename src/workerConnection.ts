@@ -34,7 +34,7 @@ interface ShellRun {
   command: string;
   output: string;
 }
-import { AcpClient, METHOD_NOT_FOUND, RpcError } from './acpClient.ts';
+import { AcpClient, ConnectionClosed, METHOD_NOT_FOUND, RpcError } from './acpClient.ts';
 import type { WorkerAddress } from './address.ts';
 import { sessionKey } from './sessionKey.ts';
 
@@ -44,7 +44,33 @@ export const WORKSPACE = '/codeflower-state/workspace';
 interface SessionSettings {
   configOptions?: SessionConfigOption[] | null;
   modes?: SessionModeState | null;
+  _meta?: {
+    /** How many transcript entries the worker had recorded when it attached the session here. */
+    'codeflower/transcriptEntries'?: number;
+    /** The agent was working on the session (a turn started by an earlier connection). */
+    'codeflower/busy'?: boolean;
+  } | null;
 }
+
+/** A session attached on this connection. */
+export interface AttachedSession {
+  key: string;
+  /** The live updates start after this many transcript entries; unknown from older workers. */
+  transcriptEntries?: number;
+}
+
+/** What the worker's agent is doing, sent by the worker whenever it changes. */
+export interface WorkerActivity {
+  chats: { key: string; state: 'working' | 'waiting'; waitingFor?: 'plan' | 'permission' | 'question' }[];
+  working: number;
+  waiting: number;
+}
+
+/** The worker sends its pending requests again to a window that reattaches; they are in the transcript already. */
+const REPLAYED_META = 'codeflower/replayed';
+
+/** The worker closes a connection with this code when another window takes it over. */
+export const TAKEN_OVER = 4001;
 
 /** Agents with only the older modes API get their modes as a config option. */
 function modeOption(modes: SessionModeState): SessionConfigOption {
@@ -113,7 +139,7 @@ export interface WorkerHandlers {
   show(request: ShowRequest): void;
   terminalOutput(terminalId: string, data: string): void;
   terminalExit(terminalId: string, exitCode: number): void;
-  closed(reason: string): void;
+  closed(reason: string, code: number): void;
 }
 
 export interface DirectoryEntry {
@@ -169,6 +195,8 @@ export class WorkerConnection {
   >();
   /** Sessions with a prompt in flight. */
   private readonly busySessions = new Set<string>();
+  /** Sessions with a turn an earlier connection started, as the worker reports. */
+  private readonly remoteBusy = new Set<string>();
   private readonly shells = new Map<string, ShellRun>();
   /** Shell commands the agent has not been told about yet, by session. */
   private readonly shellContext = new Map<string, string[]>();
@@ -191,7 +219,7 @@ export class WorkerConnection {
     const client = new AcpClient();
     await client.connect(address.url, address.token);
     const connection = new WorkerConnection(address, client, handlers);
-    client.onClose((reason) => connection.handleClose(reason));
+    client.onClose((reason, code) => connection.handleClose(reason, code));
     client.onNotification((method, params) => connection.handleNotification(method, params));
     client.onRequest((method, params) => connection.handleRequest(method, params));
     try {
@@ -288,9 +316,13 @@ export class WorkerConnection {
     return key;
   }
 
-  async resumeSession(nativeSessionId: string, cwd: string | null): Promise<string> {
+  /**
+   * Attaches a session on this connection. The worker's agent may still have it
+   * loaded, even mid-turn, from an earlier connection.
+   */
+  async resumeSession(nativeSessionId: string, cwd: string | null): Promise<AttachedSession> {
     const existing = sessionKey(this.requireAgent(), nativeSessionId);
-    if (this.sessions.has(existing)) return existing;
+    if (this.sessions.has(existing)) return { key: existing };
     const params = { sessionId: nativeSessionId, cwd: cwd ?? WORKSPACE, mcpServers: [] };
     // History is shown from code flower's transcript; ignore any replay.
     this.replaying.add(nativeSessionId);
@@ -307,14 +339,17 @@ export class WorkerConnection {
     }
     const key = this.attach(nativeSessionId);
     this.setConfig(key, response ?? {});
-    return key;
+    const meta = response?._meta;
+    if (meta?.['codeflower/busy']) this.setRemoteBusy(key, true);
+    const transcriptEntries = meta?.['codeflower/transcriptEntries'];
+    return { key, ...(typeof transcriptEntries === 'number' ? { transcriptEntries } : {}) };
   }
 
   /** What a session is doing now, for a chat tab that opens mid-turn. */
   activity(key: string): { busy: boolean; permission: PendingPermission | null; question: PendingQuestion | null } {
     const find = <T>(map: Map<number, { sessionKey: string; request: T }>) =>
       [...map.values()].find((pending) => pending.sessionKey === key)?.request ?? null;
-    return { busy: this.busySessions.has(key), permission: find(this.permissions), question: find(this.questions) };
+    return { busy: this.isBusy(key), permission: find(this.permissions), question: find(this.questions) };
   }
 
   config(key: string): SessionConfigOption[] {
@@ -360,7 +395,8 @@ export class WorkerConnection {
       return response.stopReason;
     } finally {
       this.busySessions.delete(key);
-      this.handlers.busy(key, false);
+      // A dropped connection leaves the turn running on the worker.
+      if (this.connected) this.handlers.busy(key, this.isBusy(key));
     }
   }
 
@@ -453,12 +489,28 @@ export class WorkerConnection {
     await this.client.request('_codeflower/terminal/close', { terminalId });
   }
 
-  /** dsh keys; the worker must be reconnected so the agent picks them up. */
+  /** dsh keys; the agent must be restarted to pick them up. */
   async setCredentials(credentials: DshCredentials): Promise<void> {
     await this.client.request('_codeflower/credentials/set', credentials);
   }
 
+  /** Ends the worker's agent (refused while chats are working); the next connection starts a fresh one. */
+  async restartAgent(): Promise<void> {
+    await this.client.request('_codeflower/agent/restart', {});
+  }
+
   // ---- internals ----
+
+  private isBusy(key: string): boolean {
+    return this.busySessions.has(key) || this.remoteBusy.has(key);
+  }
+
+  private setRemoteBusy(key: string, busy: boolean): void {
+    const before = this.isBusy(key);
+    if (busy) this.remoteBusy.add(key);
+    else this.remoteBusy.delete(key);
+    if (this.isBusy(key) !== before) this.handlers.busy(key, !before);
+  }
 
   private requireAgent(): AgentName {
     if (!this.agent) throw new Error('The worker did not report its agent');
@@ -520,6 +572,11 @@ export class WorkerConnection {
       case '_codeflower/show':
         this.handlers.show(params as ShowRequest);
         break;
+      case '_codeflower/activity': {
+        const working = new Set((params as WorkerActivity).chats.map((chat) => chat.key));
+        for (const key of this.sessions.keys()) this.setRemoteBusy(key, working.has(key));
+        break;
+      }
       case 'elicitation/complete':
         this.handlers.elicitationComplete(String((params as { elicitationId?: unknown }).elicitationId ?? ''));
         break;
@@ -541,7 +598,9 @@ export class WorkerConnection {
       const request = params as RequestPermissionRequest;
       const key = this.keyFor(request.sessionId) ?? sessionKey(this.requireAgent(), request.sessionId);
       const requestId = this.nextPermissionId++;
-      this.handlers.entry(key, { t: now(), kind: 'permission', toolCall: request.toolCall ?? null, options: request.options });
+      if (!request._meta?.[REPLAYED_META]) {
+        this.handlers.entry(key, { t: now(), kind: 'permission', toolCall: request.toolCall ?? null, options: request.options });
+      }
       return new Promise<RequestPermissionResponse>((resolve) => {
         const pending = { requestId, toolCall: request.toolCall ?? null, options: request.options };
         this.permissions.set(requestId, { resolve, sessionKey: key, request: pending });
@@ -557,6 +616,7 @@ export class WorkerConnection {
         sessionId?: string;
         requestedSchema?: FormSchema;
         toolCallId?: string;
+        _meta?: Record<string, unknown>;
       };
       if (request.mode === 'form' || (request.mode === undefined && request.requestedSchema)) {
         const key = request.sessionId ? this.keyFor(request.sessionId) : undefined;
@@ -564,12 +624,14 @@ export class WorkerConnection {
         if (!key) return { action: 'decline' };
         const question = { message: request.message ?? '', requestedSchema: request.requestedSchema ?? {} };
         const requestId = this.nextPermissionId++;
-        this.handlers.entry(key, {
-          t: now(),
-          kind: 'question',
-          ...question,
-          ...(request.toolCallId ? { toolCallId: request.toolCallId } : {})
-        });
+        if (!request._meta?.[REPLAYED_META]) {
+          this.handlers.entry(key, {
+            t: now(),
+            kind: 'question',
+            ...question,
+            ...(request.toolCallId ? { toolCallId: request.toolCallId } : {})
+          });
+        }
         return new Promise((resolve) => {
           const pending = { requestId, ...question };
           this.questions.set(requestId, { resolve, sessionKey: key, request: pending });
@@ -589,16 +651,24 @@ export class WorkerConnection {
     throw new RpcError({ code: METHOD_NOT_FOUND, message: `Method not found: ${method}` });
   }
 
-  private handleClose(reason: string): void {
-    this.busySessions.clear();
+  /**
+   * The worker's agent keeps working without us: pending requests are asked
+   * again when the session is reattached, so they are only hidden here.
+   */
+  private handleClose(reason: string, code: number): void {
     this.permissions.clear();
     this.questions.clear();
     for (const key of this.sessions.keys()) {
       this.handlers.permission(key, null);
       this.handlers.question(key, null);
-      this.handlers.busy(key, false);
     }
     this.sessions.clear();
-    this.handlers.closed(reason);
+    this.remoteBusy.clear();
+    this.handlers.closed(reason, code);
   }
+}
+
+/** A request the connection dropped; the worker carries on with it. */
+export function isConnectionClosed(error: unknown): boolean {
+  return error instanceof ConnectionClosed;
 }

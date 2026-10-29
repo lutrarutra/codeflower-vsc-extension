@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import type { PendingPermission, PendingQuestion, TranscriptEntry } from '../shared/messages.ts';
 import { parseWorkerAddress, type WorkerAddress } from './address.ts';
 import {
+  TAKEN_OVER,
   WorkerConnection,
   type SessionRecord,
   type ShowRequest,
@@ -22,6 +23,8 @@ export interface WorkerEntry {
   status?: WorkerStatus;
   sessions: SessionRecord[];
   error?: string;
+  /** Another window took the worker over; it is not reconnected until the user asks. */
+  takenOver?: boolean;
 }
 
 /** Receives what a worker's agent sends, tagged with the worker. */
@@ -36,7 +39,9 @@ export interface WorkerRouter {
   show(workerId: string, request: ShowRequest): void;
   terminalOutput(terminalId: string, data: string): void;
   terminalExit(terminalId: string, exitCode: number): void;
-  disconnected(workerId: string): void;
+  /** Connected (again): open chats attach to the worker's agent. */
+  connected(workerId: string): Promise<void>;
+  disconnected(workerId: string, code: number): void;
 }
 
 function serialize(address: WorkerAddress): string {
@@ -114,10 +119,11 @@ export class WorkerManager implements vscode.Disposable {
     this.changed.fire();
   }
 
-  /** A fresh connection restarts the worker's agent, e.g. after new keys. */
+  /** Connects again, e.g. to take the worker back from another window. */
   async reconnect(id: string): Promise<void> {
     const entry = this.workers.get(id);
     if (!entry) return;
+    entry.takenOver = false;
     const previous = entry.connection;
     entry.connection = undefined;
     previous?.close();
@@ -143,7 +149,11 @@ export class WorkerManager implements vscode.Disposable {
     try {
       await Promise.all(
         [...this.workers.values()].map((entry) =>
-          entry.state === 'disconnected' ? this.connect(entry).catch(() => undefined) : this.refresh(entry.id)
+          entry.state !== 'disconnected'
+            ? this.refresh(entry.id)
+            : entry.takenOver
+              ? undefined
+              : this.connect(entry).catch(() => undefined)
         )
       );
     } finally {
@@ -178,12 +188,13 @@ export class WorkerManager implements vscode.Disposable {
             show: (request) => this.router.show(entry.id, request),
             terminalOutput: (terminalId, data) => this.router.terminalOutput(terminalId, data),
             terminalExit: (terminalId, exitCode) => this.router.terminalExit(terminalId, exitCode),
-            closed: (reason) => {
+            closed: (reason, code) => {
               if (entry.connection !== connection) return;
               entry.connection = undefined;
               entry.state = 'disconnected';
               entry.error = reason;
-              this.router.disconnected(entry.id);
+              entry.takenOver = code === TAKEN_OVER;
+              this.router.disconnected(entry.id, code);
               this.changed.fire();
             }
           },
@@ -191,11 +202,12 @@ export class WorkerManager implements vscode.Disposable {
         );
         entry.connection = connection;
         entry.state = 'connected';
+        entry.takenOver = false;
         await this.refresh(entry.id);
+        await this.router.connected(entry.id);
         return;
       } catch (error) {
-        // The bridge serves one client at a time; right after a reconnect the
-        // previous connection may still be closing.
+        // Right after a restart of the agent, the worker may still be starting a fresh one.
         if (Date.now() < deadline) {
           await new Promise((resolve) => setTimeout(resolve, 200));
           continue;

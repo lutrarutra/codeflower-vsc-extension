@@ -218,7 +218,8 @@ export class SignIn {
         }
       });
     }
-    // The agent reads its keys at start; reconnecting restarts it.
+    // The agent reads its keys at start: restart it, then connect to the fresh one.
+    await connection.restartAgent();
     await this.workers.reconnect(workerId);
     void vscode.window.showInformationMessage('DeepSeek Harness credentials saved in the project.');
   }

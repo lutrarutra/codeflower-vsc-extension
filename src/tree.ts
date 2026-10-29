@@ -121,7 +121,10 @@ export class WorkerTree implements vscode.TreeDataProvider<TreeNode> {
     if (!worker) return [];
     if (worker.state === 'connecting') return [{ kind: 'message', workerId: worker.id, text: 'Connecting…' }];
     if (worker.state === 'disconnected') {
-      return [{ kind: 'message', workerId: worker.id, text: `Not reachable${worker.error ? `: ${worker.error}` : ''}` }];
+      const text = worker.takenOver
+        ? 'In use by another VS Code window; Reconnect takes it back'
+        : `Not reachable${worker.error ? `: ${worker.error}` : ''}`;
+      return [{ kind: 'message', workerId: worker.id, text }];
     }
     const children: TreeNode[] = [];
     if (worker.status && !worker.status.signedIn) children.push({ kind: 'signIn', workerId: worker.id });

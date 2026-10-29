@@ -1,0 +1,9 @@
+# Only the bundles, media and docs ship; esbuild bundles every dependency into dist/extension.cjs.
+**
+!dist/extension.cjs
+!webview/dist/**
+!media/**
+!package.json
+!README.md
+!LICENSE
+!CHANGELOG.md

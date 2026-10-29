@@ -20,6 +20,16 @@ export class RpcError extends Error {
   }
 }
 
+/** A request the connection dropped before it was answered. */
+export class ConnectionClosed extends Error {
+  readonly code: number;
+
+  constructor(message: string, code: number) {
+    super(message);
+    this.code = code;
+  }
+}
+
 type Message = {
   jsonrpc?: string;
   id?: string | number | null;
@@ -42,7 +52,7 @@ export class AcpClient {
     throw new RpcError({ code: METHOD_NOT_FOUND, message: `Method not found: ${method}` });
   };
   private notificationHandler: NotificationHandler = () => {};
-  private readonly closeHandlers: Array<(reason: string) => void> = [];
+  private readonly closeHandlers: Array<(reason: string, code: number) => void> = [];
 
   onRequest(handler: RequestHandler): void {
     this.requestHandler = handler;
@@ -52,7 +62,7 @@ export class AcpClient {
     this.notificationHandler = handler;
   }
 
-  onClose(handler: (reason: string) => void): void {
+  onClose(handler: (reason: string, code: number) => void): void {
     this.closeHandlers.push(handler);
   }
 
@@ -75,11 +85,11 @@ export class AcpClient {
     socket.on('close', (code, reason) => {
       const text = reason.toString() || `connection closed (${code})`;
       for (const { reject } of this.pending.values()) {
-        reject(new Error(text));
+        reject(new ConnectionClosed(text, code));
       }
       this.pending.clear();
       this.socket = undefined;
-      for (const handler of this.closeHandlers) handler(text);
+      for (const handler of this.closeHandlers) handler(text, code);
     });
     socket.on('error', () => {
       // The close event follows and reports the failure.

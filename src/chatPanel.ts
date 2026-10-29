@@ -12,7 +12,7 @@ import {
   type WebviewMessage
 } from '../shared/messages.ts';
 import { RpcError } from './acpClient.ts';
-import { isAuthRequired } from './workerConnection.ts';
+import { isAuthRequired, isConnectionClosed, TAKEN_OVER } from './workerConnection.ts';
 import { webviewHtml } from './webviewHtml.ts';
 import type { WorkerManager } from './workers.ts';
 
@@ -48,6 +48,8 @@ class ChatPanel {
   shellsRunning = 0;
   /** Messages sent from elsewhere (e.g. a preview's feedback) while the agent was busy. */
   private readonly waiting: string[] = [];
+  /** Live entries that arrive while the transcript loads; they follow it. */
+  private held: TranscriptEntry[] | undefined;
 
   constructor(options: {
     extensionUri: vscode.Uri;
@@ -116,13 +118,29 @@ class ChatPanel {
     try {
       await this.workers.require(this.workerId).prompt(this.key, text);
     } catch (error) {
-      this.reportError(error);
+      // The disconnect has its own notice; the turn goes on in the worker.
+      if (!isConnectionClosed(error)) this.reportError(error);
     } finally {
       void this.workers.refresh(this.workerId);
     }
   }
 
+  /** Holds live entries until `loaded` shows the transcript they follow. */
+  hold(): void {
+    this.held ??= [];
+  }
+
+  loaded(entries: TranscriptEntry[]): void {
+    const held = this.held ?? [];
+    this.held = undefined;
+    this.post({ type: 'transcript', entries: [...entries, ...held] });
+  }
+
   post(message: HostMessage): void {
+    if (message.type === 'entry' && this.held) {
+      this.held.push(message.entry);
+      return;
+    }
     if (message.type === 'transcript') this.entries = [...message.entries];
     else if (message.type === 'entry') this.entries.push(message.entry);
     else if (message.type === 'permission') {
@@ -426,23 +444,45 @@ export class ChatPanels {
       existing.panel.reveal();
       return;
     }
-    const worker = this.workers.get(workerId);
-    const session = worker?.sessions.find((candidate) => candidate.key === key);
-    const connection = this.workers.require(workerId);
+    const session = this.workers.get(workerId)?.sessions.find((candidate) => candidate.key === key);
+    this.workers.require(workerId);
     const panel = this.create(workerId, key, session?.title ?? 'Session');
-    panel.post({ type: 'transcript', entries: await connection.transcript(key) });
-    if (!session) return;
+    await this.attach(panel);
+  }
+
+  /**
+   * Shows the chat's history and attaches it on the worker's connection. The
+   * worker's agent may be mid-turn (a turn this or another window started).
+   */
+  private async attach(panel: ChatPanel): Promise<void> {
+    const { workerId, key } = panel;
+    const connection = this.workers.require(workerId);
+    const session = this.workers.get(workerId)?.sessions.find((candidate) => candidate.key === key);
+    if (!session) {
+      panel.loaded(await connection.transcript(key));
+      return;
+    }
+    panel.hold();
     try {
-      await connection.resumeSession(session.nativeSessionId, session.cwd);
+      const attached = await connection.resumeSession(session.nativeSessionId, session.cwd);
+      const entries = await connection.transcript(key);
+      // Updates after the attach came live; the transcript has them too.
+      panel.loaded(attached.transcriptEntries === undefined ? entries : entries.slice(0, attached.transcriptEntries));
       panel.post({ type: 'config', options: connection.config(key) });
-      // The tab may open while the agent works (e.g. it was closed mid-turn).
       const activity = connection.activity(key);
       panel.post({ type: 'permission', request: activity.permission });
       panel.post({ type: 'question', request: activity.question });
       panel.setState({ live: true, busy: activity.busy });
     } catch (error) {
+      panel.loaded(await connection.transcript(key).catch(() => []));
       panel.reportError(error);
     }
+  }
+
+  /** The worker is back: its open chats attach again and show what happened meanwhile. */
+  async reconnected(workerId: string): Promise<void> {
+    const panels = [...this.panels.values()].filter((panel) => panel.workerId === workerId);
+    await Promise.all(panels.map((panel) => this.attach(panel).catch((error) => panel.reportError(error))));
   }
 
   entry(workerId: string, key: string, entry: TranscriptEntry): void {
@@ -487,12 +527,21 @@ export class ChatPanels {
     this.panels.get(this.id(workerId, key))?.panel.dispose();
   }
 
-  disconnected(workerId: string): void {
+  disconnected(workerId: string, code: number): void {
+    // 1011: the agent itself ended, so its turns did too.
+    const agentEnded = code === 1011;
     for (const panel of this.panels.values()) {
       if (panel.workerId !== workerId) continue;
-      panel.setState({ live: false, busy: false });
+      panel.setState(agentEnded ? { live: false, busy: false } : { live: false });
       panel.post({ type: 'config', options: [] });
-      panel.notice('info', 'The worker disconnected. Reopen the session once it is reachable again.');
+      panel.notice(
+        'info',
+        code === TAKEN_OVER
+          ? 'Another VS Code window took over this worker. Choose Reconnect on the worker to take it back.'
+          : agentEnded
+            ? 'The worker\'s agent stopped. The chat reconnects when the worker is reachable again.'
+            : 'Disconnected from the worker; the agent keeps working. Reconnecting…'
+      );
     }
   }
 }
