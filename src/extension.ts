@@ -29,6 +29,7 @@ export function activate(context: vscode.ExtensionContext): void {
     show: (workerId, request) => previews?.show(workerId, request),
     terminalOutput: (terminalId, data) => signIn?.terminalOutput(terminalId, data),
     terminalExit: (terminalId, exitCode) => signIn?.terminalExit(terminalId, exitCode),
+    usage: (workerId) => panels?.usage(workerId),
     connected: async (workerId) => panels?.reconnected(workerId),
     disconnected: (workerId, code) => panels?.disconnected(workerId, code)
   });

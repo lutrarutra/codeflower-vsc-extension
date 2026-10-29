@@ -1,6 +1,7 @@
 import type { SessionConfigOption } from '@agentclientprotocol/sdk';
 import * as vscode from 'vscode';
 import type { PendingPermission, PendingQuestion, TranscriptEntry } from '../shared/messages.ts';
+import type { WorkerUsage } from '../shared/usage.ts';
 import { parseWorkerAddress, type WorkerAddress } from './address.ts';
 import {
   TAKEN_OVER,
@@ -22,6 +23,8 @@ export interface WorkerEntry {
   connection?: WorkerConnection;
   status?: WorkerStatus;
   sessions: SessionRecord[];
+  /** Tokens, cost, and quota; the worker sends changes as they happen. */
+  usage?: WorkerUsage;
   error?: string;
   /** Another window took the worker over; it is not reconnected until the user asks. */
   takenOver?: boolean;
@@ -39,6 +42,7 @@ export interface WorkerRouter {
   show(workerId: string, request: ShowRequest): void;
   terminalOutput(terminalId: string, data: string): void;
   terminalExit(terminalId: string, exitCode: number): void;
+  usage(workerId: string, usage: WorkerUsage): void;
   /** Connected (again): open chats attach to the worker's agent. */
   connected(workerId: string): Promise<void>;
   disconnected(workerId: string, code: number): void;
@@ -161,6 +165,12 @@ export class WorkerManager implements vscode.Disposable {
     }
   }
 
+  private setUsage(entry: WorkerEntry, usage: WorkerUsage): void {
+    entry.usage = usage;
+    this.router.usage(entry.id, usage);
+    this.changed.fire();
+  }
+
   private async save(): Promise<void> {
     await this.context.secrets.store(
       WORKERS_SECRET,
@@ -188,9 +198,14 @@ export class WorkerManager implements vscode.Disposable {
             show: (request) => this.router.show(entry.id, request),
             terminalOutput: (terminalId, data) => this.router.terminalOutput(terminalId, data),
             terminalExit: (terminalId, exitCode) => this.router.terminalExit(terminalId, exitCode),
+            usage: (usage) => {
+              if (entry.connection !== connection) return;
+              this.setUsage(entry, usage);
+            },
             closed: (reason, code) => {
               if (entry.connection !== connection) return;
               entry.connection = undefined;
+              entry.usage = undefined;
               entry.state = 'disconnected';
               entry.error = reason;
               entry.takenOver = code === TAKEN_OVER;
@@ -204,6 +219,9 @@ export class WorkerManager implements vscode.Disposable {
         entry.state = 'connected';
         entry.takenOver = false;
         await this.refresh(entry.id);
+        // Later changes come as notifications.
+        const usage = await connection.usage().catch(() => undefined);
+        if (usage && entry.connection === connection) this.setUsage(entry, usage);
         await this.router.connected(entry.id);
         return;
       } catch (error) {

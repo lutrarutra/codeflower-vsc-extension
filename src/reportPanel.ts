@@ -1,15 +1,24 @@
 // An HTML report with its scripts running: interactive charts and explorers, which
 // the sanitised preview strips. The page runs in its own webview with no network
 // (no connect-src, no remote sources) and no local files (no resource roots); all
-// it can do is tell this host two things:
-// - "send": settings from a report control, which go to the preview's feedback box
-//   for the user to read and send (never straight into the chat);
+// it can do is tell this host three things:
+// - "send": settings from a report control, or the user's comments for the agent, which
+//   go to the preview's feedback box for the user to read and send (never straight
+//   into the chat);
+// - "comments": the comments the user left on the report (JSON), to save into it;
 // - "reload": the page could not apply an update in place and wants a fresh load.
 import { createHash } from 'node:crypto';
 import * as vscode from 'vscode';
 import { interactiveHtml } from './reportHtml.ts';
 
-type ReportMessage = { type: 'send'; text: string } | { type: 'reload' };
+type ReportMessage = { type: 'send'; text: string } | { type: 'comments'; json: string } | { type: 'reload' };
+
+export interface ReportHost {
+  /** Text for the feedback box. */
+  send(text: string): void;
+  /** The user's comments on the report, as JSON. */
+  saveComments(json: string): void;
+}
 
 const STORYTELLER = /<meta name="generator" content="storyteller /;
 
@@ -17,16 +26,10 @@ export class InteractiveReport {
   readonly panel: vscode.WebviewPanel;
   private html = '';
   private digest = '';
-  private readonly onSend: (text: string) => void;
+  private readonly host: ReportHost;
 
-  constructor(
-    title: string,
-    iconPath: vscode.Uri,
-    column: vscode.ViewColumn,
-    onSend: (text: string) => void,
-    onClose: () => void
-  ) {
-    this.onSend = onSend;
+  constructor(title: string, iconPath: vscode.Uri, column: vscode.ViewColumn, host: ReportHost, onClose: () => void) {
+    this.host = host;
     this.panel = vscode.window.createWebviewPanel(
       'codeflower.report',
       `${title} (interactive)`,
@@ -35,7 +38,8 @@ export class InteractiveReport {
     );
     this.panel.iconPath = iconPath;
     this.panel.webview.onDidReceiveMessage((message: ReportMessage) => {
-      if (message?.type === 'send' && typeof message.text === 'string') this.onSend(message.text);
+      if (message?.type === 'send' && typeof message.text === 'string') this.host.send(message.text);
+      else if (message?.type === 'comments' && typeof message.json === 'string') this.host.saveComments(message.json);
       else if (message?.type === 'reload') this.load();
     });
     this.panel.onDidDispose(onClose);

@@ -39,6 +39,7 @@ class PreviewPanel {
   private readonly timer: ReturnType<typeof setInterval>;
   /** The same HTML file with its scripts running, when the user opened it. */
   private interactive: InteractiveReport | undefined;
+  private commentsSaved: Promise<void> = Promise.resolve();
 
   constructor(owner: PreviewPanels, workerId: string, file: SandboxFile, column: vscode.ViewColumn) {
     this.owner = owner;
@@ -136,6 +137,18 @@ class PreviewPanel {
     }
   }
 
+  /** Saves the user's comments into the report, one save after another, then shows the new file. */
+  private saveComments(json: string): void {
+    this.commentsSaved = this.commentsSaved
+      .then(async () => {
+        await this.owner.workers.require(this.workerId).saveReportComments(this.file.path, json);
+        await this.load();
+      })
+      .catch((error: unknown) => {
+        void vscode.window.showErrorMessage(`Could not save the comments on ${this.title}: ${describe(error)}`);
+      });
+  }
+
   /** Opens the HTML file in a tab where its scripts run (no network, no local files). */
   private openInteractive(): void {
     if (!this.data || this.file.mimeType !== 'text/html') return;
@@ -144,10 +157,13 @@ class PreviewPanel {
         this.title,
         vscode.Uri.joinPath(this.owner.extensionUri, 'media', 'preview.svg'),
         this.panel.viewColumn ?? vscode.ViewColumn.Beside,
-        (text) => {
-          // Settings chosen in the report: into the feedback box, for the user to send.
-          this.panel.reveal(undefined, false);
-          this.post({ type: 'draft', text });
+        {
+          send: (text) => {
+            // Settings chosen in the report, or comments for the agent: into the feedback box, for the user to send.
+            this.panel.reveal(undefined, false);
+            this.post({ type: 'draft', text });
+          },
+          saveComments: (json) => this.saveComments(json)
         },
         () => (this.interactive = undefined)
       );

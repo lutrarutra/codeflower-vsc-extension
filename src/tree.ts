@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { limitIsCurrent, limitIsLow, limitLine, totalsLines, usageSummary, type WorkerUsage } from '../shared/usage.ts';
 import type { SessionStatus } from '../shared/messages.ts';
 import { WORKSPACE, type Mount } from './workerConnection.ts';
 import type { WorkerEntry, WorkerManager } from './workers.ts';
@@ -168,6 +169,11 @@ export class WorkerTree implements vscode.TreeDataProvider<TreeNode> {
           .filter(Boolean)
           .join(' · ');
         item.iconPath = new vscode.ThemeIcon(icon, color ? new vscode.ThemeColor(color) : undefined);
+        // Loaded on the worker: its live counts; otherwise those its turns recorded.
+        const counts = worker?.usage?.sessions.find((candidate) => candidate.key === node.key) ?? session?.usage;
+        if (session && counts?.tokens.totalTokens) {
+          item.tooltip = [session.title, ...totalsLines(counts, worker?.usage?.costEstimate ?? false)].join('\n');
+        }
         item.contextValue = 'session';
         item.command = { command: 'codeflower.openSession', title: 'Open session', arguments: [node] };
         return item;
@@ -223,23 +229,58 @@ export class WorkerTree implements vscode.TreeDataProvider<TreeNode> {
     const label = worker.status?.agentLabel ?? 'Worker';
     const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Expanded);
     item.id = `worker:${worker.id}`;
-    item.description = `${worker.id}${worker.status?.slurmJobId ? ` · job ${worker.status.slurmJobId}` : ''}`;
+    const usage = worker.usage;
+    const summary = usage ? usageSummary(usage, usage.totals) : '';
+    item.description = [worker.id, worker.status?.slurmJobId ? `job ${worker.status.slurmJobId}` : '', summary]
+      .filter(Boolean)
+      .join(' · ');
     item.tooltip = new vscode.MarkdownString(
       [
         `**${label}** on \`${worker.id}\``,
         worker.status?.stateDirectory ? `Project: \`${worker.status.stateDirectory}\`` : '',
-        worker.status ? (worker.status.signedIn ? 'Signed in' : 'Not signed in') : '',
+        worker.status ? (worker.status.signedIn ? signedInText(usage) : 'Not signed in') : '',
+        usage ? usageTooltip(usage) : '',
         worker.error ? `Last error: ${worker.error}` : ''
       ]
         .filter(Boolean)
-        .join('\n\n')
+        .join('\n\n'),
+      // For the warning icon on a quota window that is nearly used up.
+      true
     );
     const color =
       worker.state === 'connected'
         ? new vscode.ThemeColor(worker.status?.signedIn ? 'testing.iconPassed' : 'editorWarning.foreground')
         : new vscode.ThemeColor('disabledForeground');
-    item.iconPath = new vscode.ThemeIcon(worker.state === 'connected' ? 'vm-running' : 'vm-outline', color);
+    // A quota window nearly used up turns the worker orange.
+    const low = usage?.auth.kind === 'subscription' && usage.limits.some((limit) => limitIsCurrent(limit) && limitIsLow(limit));
+    item.iconPath = new vscode.ThemeIcon(
+      worker.state === 'connected' ? 'vm-running' : 'vm-outline',
+      low && worker.state === 'connected' ? new vscode.ThemeColor('editorWarning.foreground') : color
+    );
     item.contextValue = worker.state === 'connected' ? 'worker.connected' : 'worker.disconnected';
     return item;
   }
+}
+
+function signedInText(usage: WorkerUsage | undefined): string {
+  const auth = usage?.auth;
+  if (!auth || auth.kind === 'unknown') return 'Signed in';
+  const how = auth.label ?? (auth.kind === 'api_key' ? 'an API key' : auth.plan ? `a ${auth.plan} subscription` : 'a subscription');
+  return `Signed in with ${how}`;
+}
+
+/** The quota windows, then what this worker used, in Markdown lines. */
+function usageTooltip(usage: WorkerUsage): string {
+  const lines: string[] = [];
+  if (usage.limits.length) {
+    lines.push(...usage.limits.map((limit) => `${limitIsLow(limit) ? '$(warning) ' : ''}${limitLine(limit)}`));
+    if (usage.limitsUpdatedAt) lines.push(`_Quota as of ${new Date(usage.limitsUpdatedAt).toLocaleString()}_`);
+  } else if (usage.auth.kind === 'subscription') {
+    lines.push('_The quota shows after the first answer._');
+  }
+  if (usage.credits) lines.push(`Credits: ${usage.credits.unlimited ? 'unlimited' : (usage.credits.balance ?? 'none')}`);
+  if (usage.totals.tokens.totalTokens) {
+    lines.push('**This worker so far**', ...totalsLines(usage.totals, usage.costEstimate));
+  }
+  return lines.join('  \n');
 }

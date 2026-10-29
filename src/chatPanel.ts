@@ -11,6 +11,7 @@ import {
   type TranscriptEntry,
   type WebviewMessage
 } from '../shared/messages.ts';
+import type { ChatUsage } from '../shared/usage.ts';
 import { RpcError } from './acpClient.ts';
 import { isAuthRequired, isConnectionClosed, TAKEN_OVER } from './workerConnection.ts';
 import { webviewHtml } from './webviewHtml.ts';
@@ -37,6 +38,7 @@ class ChatPanel {
   private pending: PendingPermission | null = null;
   private question: PendingQuestion | null = null;
   private config: SessionConfigOption[] = [];
+  private usage: ChatUsage = { session: null, account: null };
   private readonly extensionUri: vscode.Uri;
   private status: SessionStatus | undefined;
   private readonly onStatus: () => void;
@@ -151,6 +153,7 @@ class ChatPanel {
       this.showStatus();
     }
     else if (message.type === 'config') this.config = message.options;
+    else if (message.type === 'usage') this.usage = message.usage;
     if (!this.ready) {
       this.queue.push(message);
       return;
@@ -210,6 +213,7 @@ class ChatPanel {
         void this.panel.webview.postMessage({ type: 'permission', request: this.pending } satisfies HostMessage);
         void this.panel.webview.postMessage({ type: 'question', request: this.question } satisfies HostMessage);
         void this.panel.webview.postMessage({ type: 'config', options: this.config } satisfies HostMessage);
+        void this.panel.webview.postMessage({ type: 'usage', usage: this.usage } satisfies HostMessage);
         for (const queued of this.queue.splice(0)) {
           if (queued.type === 'notice') void this.panel.webview.postMessage(queued);
         }
@@ -411,6 +415,7 @@ export class ChatPanels {
       onConfigChosen: (configId, value) => this.rememberConfig(workerId, panel.key, configId, value)
     });
     this.panels.set(this.id(workerId, key), panel);
+    this.showUsage(panel);
     return panel;
   }
 
@@ -501,6 +506,31 @@ export class ChatPanels {
       if (named) setTimeout(update, 1000);
       else update();
     }
+  }
+
+  /** The worker's counts changed: each of its chats shows its own and the quota. */
+  usage(workerId: string): void {
+    for (const panel of this.panels.values()) if (panel.workerId === workerId) this.showUsage(panel);
+  }
+
+  private showUsage(panel: ChatPanel): void {
+    const worker = this.workers.get(panel.workerId);
+    const usage = worker?.usage;
+    let session: ChatUsage['session'] = null;
+    const live = usage?.sessions.find((candidate) => candidate.key === panel.key);
+    if (live) {
+      const { key: _, ...counts } = live;
+      session = counts;
+    } else {
+      // Not loaded on the worker: what its turns recorded.
+      session = worker?.sessions.find((candidate) => candidate.key === panel.key)?.usage ?? null;
+    }
+    let account: ChatUsage['account'] = null;
+    if (usage) {
+      const { sessions: _, totals: __, ...rest } = usage;
+      account = rest;
+    }
+    panel.post({ type: 'usage', usage: { session, account } });
   }
 
   permission(workerId: string, key: string, request: PendingPermission | null): void {

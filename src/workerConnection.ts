@@ -26,6 +26,7 @@ import {
   type SandboxFile,
   type TranscriptEntry
 } from '../shared/messages.ts';
+import type { UsageTotals, WorkerUsage } from '../shared/usage.ts';
 
 const MAX_SHELL_CONTEXT = 16 * 1024;
 
@@ -115,6 +116,8 @@ export interface SessionRecord {
   createdAt: string;
   updatedAt: string;
   openOn?: string;
+  /** The session's tokens and cost so far; missing from older workers. */
+  usage?: UsageTotals | null;
 }
 
 /** A URL the agent asks the user to open, e.g. a device-code sign-in. */
@@ -139,6 +142,8 @@ export interface WorkerHandlers {
   show(request: ShowRequest): void;
   terminalOutput(terminalId: string, data: string): void;
   terminalExit(terminalId: string, exitCode: number): void;
+  /** Token counts, cost, or the login's quota changed. */
+  usage(usage: WorkerUsage): void;
   closed(reason: string, code: number): void;
 }
 
@@ -263,6 +268,16 @@ export class WorkerConnection {
     return this.client.request<WorkerStatus>('_codeflower/status', {});
   }
 
+  /** Undefined from workers that do not track usage yet. */
+  async usage(): Promise<WorkerUsage | undefined> {
+    try {
+      return await this.client.request<WorkerUsage>('_codeflower/usage', {});
+    } catch (error) {
+      if (error instanceof RpcError && error.code === METHOD_NOT_FOUND) return undefined;
+      throw error;
+    }
+  }
+
   async listSessions(): Promise<SessionRecord[]> {
     return (await this.client.request<{ sessions: SessionRecord[] }>('_codeflower/sessions/list', {})).sessions;
   }
@@ -288,6 +303,21 @@ export class WorkerConnection {
 
   async statFile(path: string): Promise<SandboxFile> {
     return this.client.request<SandboxFile>('_codeflower/files/stat', { path });
+  }
+
+  /**
+   * Saves the comments the user left on a storyteller report (a JSON array) into the
+   * report's store and its page. Workers from before comments do not have this.
+   */
+  async saveReportComments(path: string, comments: string): Promise<void> {
+    try {
+      await this.client.request('_codeflower/reports/comments', { path, comments });
+    } catch (error) {
+      if (error instanceof RpcError && error.code === METHOD_NOT_FOUND) {
+        throw new Error('this sandbox is too old to save comments; update its image');
+      }
+      throw error;
+    }
   }
 
   /** Notes in the session's history which files the agent showed the user. */
@@ -577,6 +607,9 @@ export class WorkerConnection {
         for (const key of this.sessions.keys()) this.setRemoteBusy(key, working.has(key));
         break;
       }
+      case '_codeflower/usage':
+        this.handlers.usage(params as WorkerUsage);
+        break;
       case 'elicitation/complete':
         this.handlers.elicitationComplete(String((params as { elicitationId?: unknown }).elicitationId ?? ''));
         break;

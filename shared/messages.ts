@@ -9,6 +9,7 @@ import type {
   StopReason,
   ToolCallUpdate
 } from '@agentclientprotocol/sdk';
+import type { ChatUsage } from './usage.ts';
 
 export type AgentName = 'dsh' | 'claude' | 'codex';
 
@@ -153,6 +154,8 @@ export type HostMessage =
   | { type: 'question'; request: PendingQuestion | null }
   /** The session's settings the agent offers: mode, model, effort, … */
   | { type: 'config'; options: SessionConfigOption[] }
+  /** The chat's tokens and cost, and its worker's quota. */
+  | { type: 'usage'; usage: ChatUsage }
   | { type: 'notice'; level: 'info' | 'error'; message: string; action?: { id: 'signIn'; label: string } }
   /** A file from the sandbox the chat asked for, e.g. a figure the agent looked at; null if unavailable. */
   | { type: 'fileData'; key: string; dataUrl: string | null };

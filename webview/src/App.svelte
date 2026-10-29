@@ -8,6 +8,7 @@
     type SessionStatus,
     type TranscriptEntry
   } from '../../shared/messages.ts';
+  import type { ChatUsage } from '../../shared/usage.ts';
   import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk';
   import CommandMenu from './lib/CommandMenu.svelte';
   import { receivedFile } from './lib/sandboxFiles.svelte.ts';
@@ -16,6 +17,7 @@
   import SettingsBar from './lib/SettingsBar.svelte';
   import Transcript from './lib/Transcript.svelte';
   import Tulip from './lib/Tulip.svelte';
+  import UsageMeter from './lib/UsageMeter.svelte';
   import { send } from './lib/vscode.ts';
 
   let chat = $state<ChatState>({ title: '', subtitle: '', live: false, busy: false });
@@ -25,6 +27,7 @@
   let notice = $state<Extract<HostMessage, { type: 'notice' }> | null>(null);
   let draft = $state('');
   let config = $state<SessionConfigOption[]>([]);
+  let usage = $state<ChatUsage>({ session: null, account: null });
   let settings: SettingsBar | undefined = $state();
 
   /** Shows the choice at once; the agent's reply confirms or corrects it. */
@@ -58,6 +61,9 @@
         break;
       case 'config':
         config = message.options;
+        break;
+      case 'usage':
+        usage = message.usage;
         break;
       case 'fileData':
         receivedFile(message.key, message.dataUrl);
@@ -307,4 +313,6 @@
       </button>
     </div>
   </form>
+
+  <UsageMeter {usage} />
 </main>

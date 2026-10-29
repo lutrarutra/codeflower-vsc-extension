@@ -1,6 +1,6 @@
 // The HTML an interactive report tab loads: the report itself, behind a policy that
-// keeps it off the network and away from local files, with a two-message bridge to
-// the extension (see reportPanel.ts).
+// keeps it off the network and away from local files, with a small bridge to the
+// extension (see reportPanel.ts).
 
 /** Content-Security-Policy for an untrusted, self-contained page. */
 export const REPORT_CSP = [
@@ -19,7 +19,8 @@ const BRIDGE = `<script>(() => {
   const text = (value) => String(value).slice(0, 20000);
   window.cfHost = Object.freeze({
     send: (value) => api.postMessage({ type: 'send', text: text(value) }),
-    reload: () => api.postMessage({ type: 'reload' })
+    reload: () => api.postMessage({ type: 'reload' }),
+    saveComments: (json) => typeof json === 'string' && json.length <= 2000000 && api.postMessage({ type: 'comments', json })
   });
 })();</script>`;
 
