@@ -198,10 +198,14 @@ export type PreviewHostMessage =
   | { type: 'preview'; state: PreviewState }
   /** A file a report refers to (e.g. an image in Markdown), as a data URL. */
   | { type: 'asset'; path: string; dataUrl: string | null }
-  | { type: 'feedbackSent'; queued: boolean };
+  | { type: 'feedbackSent'; queued: boolean }
+  /** Text for the feedback box (from the interactive report), for the user to send. */
+  | { type: 'draft'; text: string };
 
 export type PreviewWebviewMessage =
   | { type: 'ready' }
+  /** Open the HTML file with its scripts running, in its own tab. */
+  | { type: 'interactive' }
   | { type: 'feedback'; text: string }
   | { type: 'asset'; path: string }
   | { type: 'openFile'; path: string }

@@ -16,6 +16,7 @@
   let sent = $state<'sent' | 'queued' | null>(null);
   let updated = $state(false);
   let actualSize = $state(false);
+  let feedbackBox: HTMLTextAreaElement | undefined = $state();
 
   function receive(event: MessageEvent<PreviewHostMessage>): void {
     const message = event.data;
@@ -38,6 +39,10 @@
       case 'feedbackSent':
         sent = message.queued ? 'queued' : 'sent';
         setTimeout(() => (sent = null), 6000);
+        break;
+      case 'draft':
+        draft = draft.trim() ? `${draft.trim()}\n\n${message.text}` : message.text;
+        feedbackBox?.focus();
         break;
     }
   }
@@ -125,6 +130,16 @@
         <span class="shrink-0 rounded-full bg-teal-soft px-2 py-0.5 text-[0.8em] font-semibold text-teal">
           <span class="codicon codicon-refresh text-[11px]!"></span> updated
         </span>
+      {/if}
+      {#if kind === 'html'}
+        <button
+          class="chip shrink-0"
+          title="Open the report with its interactive charts, in its own tab (no network access)"
+          disabled={!preview.data}
+          onclick={() => sendPreview({ type: 'interactive' })}
+        >
+          <span class="codicon codicon-play"></span> Open interactive
+        </button>
       {/if}
       <button class="chip shrink-0" title="Save a copy on this machine" disabled={!preview.data} onclick={() => sendPreview({ type: 'save' })}>
         <span class="codicon codicon-save"></span> Save
@@ -223,6 +238,7 @@
           ? `Tell the agent what to change… (${kind === 'image' ? 'e.g. bigger labels, a log scale, other colors' : 'it sees which file you mean'})`
           : 'Open a chat on this worker to give the agent feedback'}
         disabled={!preview.chat || !preview.live}
+        bind:this={feedbackBox}
         bind:value={draft}
         onkeydown={(event) => {
           if (event.key === 'Enter' && !event.shiftKey) {

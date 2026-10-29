@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 import type { PreviewHostMessage, PreviewState, PreviewWebviewMessage, SandboxFile } from '../shared/messages.ts';
 import type { ChatPanels } from './chatPanel.ts';
 import { WORKSPACE, type ShowRequest } from './workerConnection.ts';
+import { InteractiveReport } from './reportPanel.ts';
 import { webviewHtml } from './webviewHtml.ts';
 import type { WorkerManager } from './workers.ts';
 
@@ -36,6 +37,8 @@ class PreviewPanel {
   private ready = false;
   private loading: Promise<void> | undefined;
   private readonly timer: ReturnType<typeof setInterval>;
+  /** The same HTML file with its scripts running, when the user opened it. */
+  private interactive: InteractiveReport | undefined;
 
   constructor(owner: PreviewPanels, workerId: string, file: SandboxFile, column: vscode.ViewColumn) {
     this.owner = owner;
@@ -57,6 +60,7 @@ class PreviewPanel {
     this.timer = setInterval(() => void this.poll(), POLL_MS);
     this.panel.onDidDispose(() => {
       clearInterval(this.timer);
+      this.interactive?.panel.dispose();
       owner.closed(this);
     });
   }
@@ -100,6 +104,7 @@ class PreviewPanel {
         this.file = info;
         this.data = data;
         this.error = null;
+        this.interactive?.update(Buffer.from(data, 'base64').toString('utf8'));
         if (this.noteShown) {
           this.messageFor = info.mtimeMs;
           this.noteShown = false;
@@ -116,7 +121,8 @@ class PreviewPanel {
   }
 
   private async poll(): Promise<void> {
-    if (!this.panel.visible || this.loading) return;
+    // The interactive tab follows the file too, while the preview is in the background.
+    if (!(this.panel.visible || this.interactive?.panel.visible) || this.loading) return;
     const connection = this.owner.workers.get(this.workerId)?.connection;
     if (!connection?.connected) return;
     try {
@@ -128,6 +134,26 @@ class PreviewPanel {
         this.postState();
       }
     }
+  }
+
+  /** Opens the HTML file in a tab where its scripts run (no network, no local files). */
+  private openInteractive(): void {
+    if (!this.data || this.file.mimeType !== 'text/html') return;
+    if (!this.interactive) {
+      this.interactive = new InteractiveReport(
+        this.title,
+        vscode.Uri.joinPath(this.owner.extensionUri, 'media', 'preview.svg'),
+        this.panel.viewColumn ?? vscode.ViewColumn.Beside,
+        (text) => {
+          // Settings chosen in the report: into the feedback box, for the user to send.
+          this.panel.reveal(undefined, false);
+          this.post({ type: 'draft', text });
+        },
+        () => (this.interactive = undefined)
+      );
+    }
+    this.interactive.update(Buffer.from(this.data, 'base64').toString('utf8'));
+    this.interactive.reveal();
   }
 
   private async handle(message: PreviewWebviewMessage): Promise<void> {
@@ -185,6 +211,9 @@ class PreviewPanel {
       }
       case 'showChat':
         if (this.chatKey) this.owner.chats.reveal(this.workerId, this.chatKey);
+        break;
+      case 'interactive':
+        this.openInteractive();
         break;
     }
   }
