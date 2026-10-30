@@ -8,7 +8,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
-    "codeflower-ui": "github:lutrarutra/codeflower-ui#v0.1.0",
+    "codeflower-ui": "github:lutrarutra/codeflower-ui#v0.2.0",
     "svelte": "^5.51.0"
   },
   "devDependencies": {
