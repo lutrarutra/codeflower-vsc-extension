@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { wrapUpMessage } from '../src/workerConnection.ts';
+import { wrapUpMessage } from '../src/wrapUp.ts';
 
 test('says the client is quitting and how long it waits', () => {
   assert.equal(

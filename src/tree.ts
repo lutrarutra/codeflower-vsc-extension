@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
-import { limitIsCurrent, limitIsLow, limitLine, totalsLines, usageSummary, type WorkerUsage } from '../shared/usage.ts';
-import type { SessionStatus } from '../shared/messages.ts';
-import { WORKSPACE, type Mount } from './workerConnection.ts';
+import { limitIsCurrent, limitIsLow, limitLine, totalsLines, usageSummary, type WorkerUsage } from 'codeflower-ui/protocol/usage.ts';
+import type { SessionStatus } from 'codeflower-ui/protocol/messages.ts';
+import { WORKSPACE, type Mount } from 'codeflower-ui/client/workerConnection.ts';
 import type { WorkerEntry, WorkerManager } from './workers.ts';
 
 /** The app mounts each of the user's folders in a subfolder of one of these. */

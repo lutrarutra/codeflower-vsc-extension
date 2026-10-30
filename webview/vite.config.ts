@@ -8,6 +8,8 @@ export default defineConfig({
   // Relative URLs: the webview serves dist/ from its own vscode-resource origin.
   base: './',
   plugins: [tailwindcss(), svelte()],
+  // A linked codeflower-ui checkout has its own svelte; the chat must use this one.
+  resolve: { dedupe: ['svelte'] },
   build: {
     outDir: 'dist',
     emptyOutDir: true,

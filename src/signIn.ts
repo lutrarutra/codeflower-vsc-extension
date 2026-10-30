@@ -2,7 +2,7 @@
 // and store their login there. code flower only relays what the user types.
 import type { AuthMethod } from '@agentclientprotocol/sdk';
 import * as vscode from 'vscode';
-import type { UrlElicitation } from './workerConnection.ts';
+import type { UrlElicitation } from 'codeflower-ui/client/workerConnection.ts';
 import type { WorkerManager } from './workers.ts';
 
 /** A VS Code terminal connected to a sign-in command running in the sandbox. */

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { parseWorkerAddress } from './address.ts';
+import { parseWorkerAddress } from 'codeflower-ui/client/address.ts';
 import { ChatPanels } from './chatPanel.ts';
 import { followDevWorker } from './devWorker.ts';
 import { PreviewPanels } from './previewPanel.ts';

@@ -3,9 +3,9 @@
 // follows its file and sends the user's feedback to the chat it came from.
 import { posix } from 'node:path';
 import * as vscode from 'vscode';
-import type { PreviewHostMessage, PreviewState, PreviewWebviewMessage, SandboxFile } from '../shared/messages.ts';
+import type { PreviewHostMessage, PreviewState, PreviewWebviewMessage, SandboxFile } from 'codeflower-ui/protocol/messages.ts';
 import type { ChatPanels } from './chatPanel.ts';
-import { WORKSPACE, type ShowRequest } from './workerConnection.ts';
+import { WORKSPACE, type ShowRequest } from 'codeflower-ui/client/workerConnection.ts';
 import { InteractiveReport, isStorytellerReport } from './reportPanel.ts';
 import { webviewHtml } from './webviewHtml.ts';
 import type { WorkerManager } from './workers.ts';

@@ -1,18 +1,19 @@
 import type { SessionConfigOption } from '@agentclientprotocol/sdk';
 import * as vscode from 'vscode';
-import type { PendingPermission, PendingQuestion, TranscriptEntry } from '../shared/messages.ts';
-import type { WorkerUsage } from '../shared/usage.ts';
-import { parseWorkerAddress, type WorkerAddress } from './address.ts';
+import type { ChatAction, PendingPermission, PendingQuestion, TranscriptEntry } from 'codeflower-ui/protocol/messages.ts';
+import type { WorkerUsage } from 'codeflower-ui/protocol/usage.ts';
+import { parseWorkerAddress, type WorkerAddress } from 'codeflower-ui/client/address.ts';
 import {
   TAKEN_OVER,
   WorkerConnection,
-  wrapUpMessage,
   type SessionRecord,
   type ShowRequest,
   type UrlElicitation,
   type WorkerStatus,
   type WrapUpNotice
-} from './workerConnection.ts';
+} from 'codeflower-ui/client/workerConnection.ts';
+import { wrapUpMessage } from './wrapUp.ts';
+import { wsTransport } from './wsTransport.ts';
 
 const WORKERS_SECRET = 'codeflower.workers';
 const POLL_MS = 10_000;
@@ -24,6 +25,7 @@ export interface WorkerEntry {
   state: 'connecting' | 'connected' | 'disconnected';
   connection?: WorkerConnection;
   status?: WorkerStatus;
+  actions?: ChatAction[];
   sessions: SessionRecord[];
   /** Tokens, cost, and quota; the worker sends changes as they happen. */
   usage?: WorkerUsage;
@@ -192,7 +194,7 @@ export class WorkerManager implements vscode.Disposable {
     for (;;) {
       try {
         const connection = await WorkerConnection.connect(
-          entry.address,
+          await wsTransport(entry.address),
           {
             entry: (key, item) => this.router.entry(entry.id, key, item),
             permission: (key, request) => this.router.permission(entry.id, key, request),
@@ -220,9 +222,17 @@ export class WorkerManager implements vscode.Disposable {
               this.changed.fire();
             }
           },
-          String(this.context.extension.packageJSON.version ?? '0.0.0')
+          { name: 'codeflower-vscode', title: 'code flower', version: String(this.context.extension.packageJSON.version ?? '0.0.0') }
         );
+        let actions: ChatAction[] | undefined;
+        try {
+          actions = await connection.actions();
+        } catch (error) {
+          connection.close();
+          throw error;
+        }
         entry.connection = connection;
+        entry.actions = actions;
         entry.state = 'connected';
         entry.takenOver = false;
         await this.refresh(entry.id);

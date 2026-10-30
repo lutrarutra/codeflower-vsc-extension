@@ -1,8 +1,11 @@
 import * as vscode from 'vscode';
 import type { SessionConfigOption } from '@agentclientprotocol/sdk';
 import {
+  agentPresentation,
   sessionStatus,
-  type AgentName,
+  type ActionPromptMeta,
+  type AgentPresentation,
+  type ChatAction,
   type ChatState,
   type HostMessage,
   type PendingPermission,
@@ -10,10 +13,10 @@ import {
   type SessionStatus,
   type TranscriptEntry,
   type WebviewMessage
-} from '../shared/messages.ts';
-import type { ChatUsage } from '../shared/usage.ts';
-import { RpcError } from './acpClient.ts';
-import { isAuthRequired, isConnectionClosed, TAKEN_OVER } from './workerConnection.ts';
+} from 'codeflower-ui/protocol/messages.ts';
+import { PromptQueue } from 'codeflower-ui/client/promptQueue.ts';
+import type { ChatUsage } from 'codeflower-ui/protocol/usage.ts';
+import { isAuthRequired, isConnectionClosed, RpcError, TAKEN_OVER } from 'codeflower-ui/client/workerConnection.ts';
 import { webviewHtml } from './webviewHtml.ts';
 import type { WorkerManager } from './workers.ts';
 
@@ -49,7 +52,8 @@ class ChatPanel {
   /** The user's `!commands` running now; files they show belong to this chat. */
   shellsRunning = 0;
   /** Messages sent from elsewhere (e.g. a preview's feedback) while the agent was busy. */
-  private readonly waiting: string[] = [];
+  private readonly waiting = new PromptQueue();
+  private sending = false;
   /** Live entries that arrive while the transcript loads; they follow it. */
   private held: TranscriptEntry[] | undefined;
 
@@ -61,7 +65,8 @@ class ChatPanel {
     key: string;
     title: string;
     subtitle: string;
-    agent?: AgentName;
+    agent?: AgentPresentation;
+    actions?: ChatAction[];
     onDispose: () => void;
     onStatus: () => void;
     onOpenFile: (path: string) => void;
@@ -75,9 +80,14 @@ class ChatPanel {
       title: options.title,
       subtitle: options.subtitle,
       agent: options.agent,
+      actions: options.actions,
+      autoApprove: options.agent?.id === 'dsh' ? true : undefined,
       live: false,
       busy: false
     };
+    if (this.state.autoApprove !== undefined) {
+      this.workers.get(this.workerId)?.connection?.setAutoApprove(this.key, this.state.autoApprove);
+    }
     const assets = vscode.Uri.joinPath(options.extensionUri, 'webview', 'dist');
     this.panel = vscode.window.createWebviewPanel('codeflower.chat', tabTitle(options.title), vscode.ViewColumn.Active, {
       enableScripts: true,
@@ -107,24 +117,64 @@ class ChatPanel {
 
   /** Sends a message to the agent as if typed here; it waits while the agent works. */
   send(text: string): 'sent' | 'queued' {
-    if (this.state.busy) {
-      this.waiting.push(text);
+    if (this.state.busy || this.sending) {
+      this.waiting.enqueue(text, 'Preview feedback');
+      this.publishQueue();
       return 'queued';
     }
     void this.sendPrompt(text);
     return 'sent';
   }
 
-  private async sendPrompt(text: string): Promise<void> {
+  private async sendPrompt(text: string, action?: ActionPromptMeta): Promise<void> {
+    this.sending = true;
     this.lastUsed = Date.now();
     try {
-      await this.workers.require(this.workerId).prompt(this.key, text);
+      await this.workers.require(this.workerId).prompt(this.key, text, action);
     } catch (error) {
       // The disconnect has its own notice; the turn goes on in the worker.
       if (!isConnectionClosed(error)) this.reportError(error);
     } finally {
       void this.workers.refresh(this.workerId);
+      this.sending = false;
+      this.flushWaiting();
     }
+  }
+
+  private publishQueue(): void {
+    this.post({ type: 'queue', items: this.waiting.summaries() });
+  }
+
+  private flushWaiting(): void {
+    if (this.state.busy || !this.state.live || this.sending) return;
+    const next = this.waiting.take();
+    this.publishQueue();
+    if (next) void this.sendPrompt(next.text, next.action);
+  }
+
+  private runAction(id: string): void {
+    if (!this.state.live) {
+      this.notice('info', 'This session is read-only here.');
+      return;
+    }
+    const action = this.state.actions?.find((candidate) => candidate.id === id);
+    if (!action) {
+      this.notice('error', 'This action is unavailable on this worker. Reconnect to an updated sandbox.');
+      return;
+    }
+    const meta = { id: action.id, title: action.title };
+    if (this.state.busy || this.sending) {
+      if (action.mode === 'interrupt') {
+        this.waiting.replace(action.prompt, action.title, meta);
+        this.publishQueue();
+        this.workers.get(this.workerId)?.connection?.cancel(this.key);
+      } else {
+        this.waiting.enqueue(action.prompt, action.title, meta);
+        this.publishQueue();
+      }
+      return;
+    }
+    void this.sendPrompt(action.prompt, meta);
   }
 
   /** Holds live entries until `loaded` shows the transcript they follow. */
@@ -163,12 +213,15 @@ class ChatPanel {
 
   setState(update: Partial<ChatState>): void {
     this.state = { ...this.state, ...update };
-    if (!this.state.busy && this.state.live && this.waiting.length) {
-      void this.sendPrompt(this.waiting.splice(0).join('\n\n'));
+    if (this.state.agent?.id === 'dsh') this.state.autoApprove ??= true;
+    else this.state.autoApprove = undefined;
+    if (this.state.autoApprove !== undefined) {
+      this.workers.get(this.workerId)?.connection?.setAutoApprove(this.key, this.state.autoApprove);
     }
     this.panel.title = tabTitle(this.state.title);
     this.showStatus();
     this.post({ type: 'state', state: this.state });
+    this.flushWaiting();
   }
 
   get sessionStatus(): SessionStatus {
@@ -214,6 +267,7 @@ class ChatPanel {
         void this.panel.webview.postMessage({ type: 'question', request: this.question } satisfies HostMessage);
         void this.panel.webview.postMessage({ type: 'config', options: this.config } satisfies HostMessage);
         void this.panel.webview.postMessage({ type: 'usage', usage: this.usage } satisfies HostMessage);
+        void this.panel.webview.postMessage({ type: 'queue', items: this.waiting.summaries() } satisfies HostMessage);
         for (const queued of this.queue.splice(0)) {
           if (queued.type === 'notice') void this.panel.webview.postMessage(queued);
         }
@@ -264,6 +318,9 @@ class ChatPanel {
           this.post({ type: 'config', options: this.workers.get(this.workerId)?.connection?.config(this.key) ?? this.config });
         }
         break;
+      case 'setAutoApprove':
+        if (this.state.agent?.id === 'dsh') this.setState({ autoApprove: message.enabled });
+        break;
       case 'cancel':
         this.workers.get(this.workerId)?.connection?.cancel(this.key);
         break;
@@ -271,7 +328,11 @@ class ChatPanel {
         this.workers.get(this.workerId)?.connection?.answerPermission(message.requestId, message.optionId);
         break;
       case 'action':
-        await this.signIn(this.workerId);
+        if (message.id === 'signIn') await this.signIn(this.workerId);
+        else this.runAction(message.id);
+        break;
+      case 'removeQueued':
+        if (this.waiting.remove(message.id)) this.publishQueue();
         break;
     }
   }
@@ -404,8 +465,9 @@ export class ChatPanels {
       workerId,
       key,
       title,
+      actions: worker?.actions,
       subtitle: `${worker?.status?.agentLabel ?? 'Agent'} · ${workerId}`,
-      agent: worker?.status?.agent,
+      agent: agentPresentation(worker?.status?.agent, { name: worker?.status?.agentLabel, ...worker?.status?.agentInfo }),
       onDispose: () => {
         this.panels.delete(this.id(workerId, panel.key));
         this.statusChanged.fire();
@@ -487,6 +549,7 @@ export class ChatPanels {
   /** The worker is back: its open chats attach again and show what happened meanwhile. */
   async reconnected(workerId: string): Promise<void> {
     const panels = [...this.panels.values()].filter((panel) => panel.workerId === workerId);
+    for (const panel of panels) panel.setState({ actions: this.workers.get(workerId)?.actions });
     await Promise.all(panels.map((panel) => this.attach(panel).catch((error) => panel.reportError(error))));
   }
 
