@@ -7,7 +7,7 @@
 <p align="center">Chat with the agents in your code flower sandboxes, right in VS Code.</p>
 
 <p align="center">
-  <a href="https://github.com/lutrarutra/codeflower-launcher"><img src="https://raw.githubusercontent.com/lutrarutra/codeflower-launcher/main/assets/icon.png" width="20" height="20" alt=""> launcher</a>
+  <a href="https://github.com/lutrarutra/codeflower-app"><img src="https://raw.githubusercontent.com/lutrarutra/codeflower-app/main/assets/icon.png" width="20" height="20" alt=""> app</a>
   &nbsp;·&nbsp;
   <a href="https://github.com/lutrarutra/codeflower-sandbox"><img src="https://raw.githubusercontent.com/lutrarutra/codeflower-sandbox/main/assets/icon.png" width="20" height="20" alt=""> sandbox</a>
   &nbsp;·&nbsp;
@@ -19,7 +19,7 @@
 </p>
 
 The VS Code extension of code flower: it connects to code flower workers (sandboxes started by
-[codeflower-launcher](https://github.com/lutrarutra/codeflower-launcher)), lists them with their
+[codeflower-app](https://github.com/lutrarutra/codeflower-app)), lists them with their
 sessions, and opens a chat (a Svelte webview in `webview/`) per session.
 
 ## How code flower fits together

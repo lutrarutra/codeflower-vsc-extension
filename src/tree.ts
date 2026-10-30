@@ -4,7 +4,7 @@ import type { SessionStatus } from '../shared/messages.ts';
 import { WORKSPACE, type Mount } from './workerConnection.ts';
 import type { WorkerEntry, WorkerManager } from './workers.ts';
 
-/** The launcher mounts each of the user's folders in a subfolder of one of these. */
+/** The app mounts each of the user's folders in a subfolder of one of these. */
 const MOUNT_GROUPS = [
   { root: '/data/input', label: 'Inputs', icon: 'database' },
   { root: '/data/output', label: 'Outputs', icon: 'output' },

@@ -70,7 +70,7 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   context.subscriptions.push(
-    // The launcher window's "Open in VS Code" button:
+    // The app window's "Open in VS Code" button:
     //   vscode://codeflower.codeflower/connect?address=codeflower://…
     vscode.window.registerUriHandler({
       handleUri: guarded(async (uri: vscode.Uri) => {
@@ -80,7 +80,7 @@ export function activate(context: vscode.ExtensionContext): void {
         // Any link can ask to connect, so the user confirms where to.
         const choice = await vscode.window.showInformationMessage(
           `Connect to the code flower sandbox at ${address.display}?`,
-          { modal: true, detail: 'Only connect to sandboxes you started yourself, for example from the code flower launcher.' },
+          { modal: true, detail: 'Only connect to sandboxes you started yourself, for example from the code flower app.' },
           'Connect'
         );
         if (choice !== 'Connect') return;

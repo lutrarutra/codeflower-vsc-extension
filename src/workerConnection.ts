@@ -98,7 +98,7 @@ export interface WorkerStatus {
   slurmJobId?: string;
   /** When the batch job ends (ISO 8601); chats are asked to wrap up before. Missing without a known end. */
   allocationEnd?: string;
-  /** Folders the launcher mounted, e.g. /data/input/study42; missing from older workers. */
+  /** Folders the app mounted, e.g. /data/input/study42; missing from older workers. */
   mounts?: Mount[];
 }
 
