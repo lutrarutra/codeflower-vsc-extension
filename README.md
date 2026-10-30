@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="media/icon.svg" width="112" height="112" alt="code flower for VS Code icon">
+  <img src="media/icon.png" width="112" height="112" alt="code flower for VS Code icon">
 </p>
 
 <h1 align="center">code flower for VS Code</h1>
@@ -9,11 +9,11 @@
 <p align="center">
   <a href="https://github.com/lutrarutra/codeflower-launcher"><img src="https://raw.githubusercontent.com/lutrarutra/codeflower-launcher/main/assets/icon.png" width="20" height="20" alt=""> launcher</a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/lutrarutra/codeflower-sandbox"><img src="https://raw.githubusercontent.com/lutrarutra/codeflower-sandbox/main/assets/icon.svg" width="20" height="20" alt=""> sandbox</a>
+  <a href="https://github.com/lutrarutra/codeflower-sandbox"><img src="https://raw.githubusercontent.com/lutrarutra/codeflower-sandbox/main/assets/icon.png" width="20" height="20" alt=""> sandbox</a>
   &nbsp;·&nbsp;
-  <b><img src="media/icon.svg" width="20" height="20" alt=""> VS Code extension</b>
+  <b><img src="media/icon.png" width="20" height="20" alt=""> VS Code extension</b>
   &nbsp;·&nbsp;
-  <a href="https://github.com/lutrarutra/storyteller"><img src="https://raw.githubusercontent.com/lutrarutra/storyteller/main/assets/icon.svg" width="20" height="20" alt=""> storyteller</a>
+  <a href="https://github.com/lutrarutra/storyteller"><img src="https://raw.githubusercontent.com/lutrarutra/storyteller/main/assets/icon.png" width="20" height="20" alt=""> storyteller</a>
   &nbsp;·&nbsp;
   <a href="https://codeflower.dev">codeflower.dev</a>
 </p>
