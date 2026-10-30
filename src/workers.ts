@@ -6,6 +6,7 @@ import { parseWorkerAddress, type WorkerAddress } from './address.ts';
 import {
   TAKEN_OVER,
   WorkerConnection,
+  wrapUpMessage,
   type SessionRecord,
   type ShowRequest,
   type UrlElicitation,
@@ -167,15 +168,7 @@ export class WorkerManager implements vscode.Disposable {
   }
 
   private warnWrapUp(entry: WorkerEntry, notice: WrapUpNotice): void {
-    const label = entry.status?.agentLabel ?? 'Worker';
-    const end = new Date(notice.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const chats =
-      notice.chats === 0
-        ? 'No chat was working.'
-        : `${notice.chats === 1 ? 'Its working chat was' : `Its ${notice.chats} working chats were`} stopped and asked to save their work and write up where they are.`;
-    void vscode.window.showWarningMessage(
-      `${label} on ${entry.id}: the job ends at ${end}, in about ${notice.minutes} minutes, and the sandbox stops with it. ${chats}`
-    );
+    void vscode.window.showWarningMessage(wrapUpMessage(entry.status?.agentLabel ?? 'Worker', entry.id, notice));
   }
 
   private setUsage(entry: WorkerEntry, usage: WorkerUsage): void {

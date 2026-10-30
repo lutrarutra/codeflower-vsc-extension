@@ -124,10 +124,27 @@ export interface SessionRecord {
 
 /** The batch job ends soon: the worker stopped the chats with a turn running and asked them to wrap up. */
 export interface WrapUpNotice {
-  end: string;
+  /** time: the batch job ends (older bridges send no reason); quit: the client that started the sandbox quits. */
+  reason?: 'time' | 'quit';
+  /** When the job ends; only for time. */
+  end?: string;
+  /** Until the job ends, or at most how long the quitting client waits. */
   minutes: number;
   /** How many chats were asked to wrap up. */
   chats: number;
+}
+
+/** The warning shown when a worker asks its chats to wrap up. */
+export function wrapUpMessage(label: string, id: string, notice: WrapUpNotice): string {
+  const chats =
+    notice.chats === 0
+      ? 'No chat was working.'
+      : `${notice.chats === 1 ? 'Its working chat was' : `Its ${notice.chats} working chats were`} stopped and asked to save their work and write up where they are.`;
+  if (notice.reason === 'quit') {
+    return `${label} on ${id}: the code flower client that started it is quitting. ${chats} The sandbox stops when ${notice.chats === 1 ? 'it is' : 'they are'} done, at most in ${notice.minutes} minutes.`;
+  }
+  const end = new Date(notice.end ?? '').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return `${label} on ${id}: the job ends at ${end}, in about ${notice.minutes} minutes, and the sandbox stops with it. ${chats}`;
 }
 
 /** A URL the agent asks the user to open, e.g. a device-code sign-in. */
