@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 import type { PreviewHostMessage, PreviewState, PreviewWebviewMessage, SandboxFile } from '../shared/messages.ts';
 import type { ChatPanels } from './chatPanel.ts';
 import { WORKSPACE, type ShowRequest } from './workerConnection.ts';
-import { InteractiveReport } from './reportPanel.ts';
+import { InteractiveReport, isStorytellerReport } from './reportPanel.ts';
 import { webviewHtml } from './webviewHtml.ts';
 import type { WorkerManager } from './workers.ts';
 
@@ -39,6 +39,8 @@ class PreviewPanel {
   private readonly timer: ReturnType<typeof setInterval>;
   /** The same HTML file with its scripts running, when the user opened it. */
   private interactive: InteractiveReport | undefined;
+  /** Shown or opened again: a storyteller report opens interactive once it has loaded. */
+  private wantsInteractive = false;
   private commentsSaved: Promise<void> = Promise.resolve();
 
   constructor(owner: PreviewPanels, workerId: string, file: SandboxFile, column: vscode.ViewColumn) {
@@ -68,6 +70,7 @@ class PreviewPanel {
 
   /** Shows the file again, e.g. when the agent shows it once more. */
   update(options: { title?: string; message?: string | null; chatKey?: string }): void {
+    this.wantsInteractive = true;
     if (options.title) this.title = options.title;
     if (options.message !== undefined) {
       this.message = options.message;
@@ -105,7 +108,15 @@ class PreviewPanel {
         this.file = info;
         this.data = data;
         this.error = null;
-        this.interactive?.update(Buffer.from(data, 'base64').toString('utf8'));
+        const html = info.mimeType === 'text/html' ? Buffer.from(data, 'base64').toString('utf8') : '';
+        this.interactive?.update(html);
+        if (this.wantsInteractive) {
+          this.wantsInteractive = false;
+          // Charts, explorers and comments only work with the scripts running; the static
+          // preview stays behind it with the feedback box.
+          const enabled = vscode.workspace.getConfiguration('codeflower').get('reports.openInteractive', true);
+          if (enabled && isStorytellerReport(html)) this.openInteractive(true);
+        }
         if (this.noteShown) {
           this.messageFor = info.mtimeMs;
           this.noteShown = false;
@@ -150,7 +161,7 @@ class PreviewPanel {
   }
 
   /** Opens the HTML file in a tab where its scripts run (no network, no local files). */
-  private openInteractive(): void {
+  private openInteractive(preserveFocus = false): void {
     if (!this.data || this.file.mimeType !== 'text/html') return;
     if (!this.interactive) {
       this.interactive = new InteractiveReport(
@@ -165,11 +176,12 @@ class PreviewPanel {
           },
           saveComments: (json) => this.saveComments(json)
         },
-        () => (this.interactive = undefined)
+        () => (this.interactive = undefined),
+        preserveFocus
       );
     }
     this.interactive.update(Buffer.from(this.data, 'base64').toString('utf8'));
-    this.interactive.reveal();
+    this.interactive.reveal(preserveFocus);
   }
 
   private async handle(message: PreviewWebviewMessage): Promise<void> {

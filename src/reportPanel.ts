@@ -22,18 +22,30 @@ export interface ReportHost {
 
 const STORYTELLER = /<meta name="generator" content="storyteller /;
 
+/** Pages made by storyteller, whose runtime takes comments and in-place updates. */
+export function isStorytellerReport(html: string): boolean {
+  return STORYTELLER.test(html);
+}
+
 export class InteractiveReport {
   readonly panel: vscode.WebviewPanel;
   private html = '';
   private digest = '';
   private readonly host: ReportHost;
 
-  constructor(title: string, iconPath: vscode.Uri, column: vscode.ViewColumn, host: ReportHost, onClose: () => void) {
+  constructor(
+    title: string,
+    iconPath: vscode.Uri,
+    column: vscode.ViewColumn,
+    host: ReportHost,
+    onClose: () => void,
+    preserveFocus = false
+  ) {
     this.host = host;
     this.panel = vscode.window.createWebviewPanel(
       'codeflower.report',
       `${title} (interactive)`,
-      { viewColumn: column, preserveFocus: false },
+      { viewColumn: column, preserveFocus },
       { enableScripts: true, localResourceRoots: [], retainContextWhenHidden: true, enableFindWidget: true }
     );
     this.panel.iconPath = iconPath;
@@ -63,7 +75,7 @@ export class InteractiveReport {
     this.panel.webview.html = interactiveHtml(this.html);
   }
 
-  reveal(): void {
-    this.panel.reveal(undefined, false);
+  reveal(preserveFocus = false): void {
+    this.panel.reveal(undefined, preserveFocus);
   }
 }

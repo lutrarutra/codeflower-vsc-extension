@@ -40,6 +40,16 @@
     "onUri"
   ],
   "contributes": {
+    "configuration": {
+      "title": "code flower",
+      "properties": {
+        "codeflower.reports.openInteractive": {
+          "type": "boolean",
+          "default": true,
+          "description": "Open storyteller reports in their interactive tab (charts, explorers, comments) when the agent shows them or you open one from the chat. Other HTML files open in the static preview."
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {
