@@ -208,12 +208,19 @@ export class SignIn {
         validateInput: (value) => (value.split(',').some((model) => model.trim()) ? undefined : 'Enter at least one model')
       });
       if (!models) return;
+      const reasoningEfforts = await vscode.window.showInputBox({
+        prompt: 'Reasoning effort values accepted by the endpoint, separated by commas (blank disables the picker)',
+        value: 'low, medium, high',
+        ignoreFocusOut: true
+      });
+      if (reasoningEfforts === undefined) return;
       const apiKey = await vscode.window.showInputBox({ prompt: 'API key for the endpoint', password: true, ignoreFocusOut: true });
       if (!apiKey?.trim()) return;
       await connection.setCredentials({
         openaiCompatible: {
           baseURL: baseURL.trim(),
           models: models.split(',').map((model) => model.trim()).filter(Boolean),
+          reasoningEfforts: reasoningEfforts.split(',').map((effort) => effort.trim()).filter(Boolean),
           apiKey: apiKey.trim()
         }
       });
