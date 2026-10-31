@@ -173,6 +173,23 @@ export class WorkerManager implements vscode.Disposable {
     void vscode.window.showWarningMessage(wrapUpMessage(entry.status?.agentLabel ?? 'Worker', entry.id, notice));
   }
 
+  /**
+   * Asks for the usage again, e.g. when a chat opens or comes to the front:
+   * the worker then reads the login's quota if its last read is old, and
+   * sends it when it has it.
+   */
+  refreshUsage(id: string): void {
+    const entry = this.workers.get(id);
+    const connection = entry?.connection;
+    if (!entry || !connection) return;
+    void connection
+      .usage()
+      .then((usage) => {
+        if (usage && entry.connection === connection) this.setUsage(entry, usage);
+      })
+      .catch(() => undefined);
+  }
+
   private setUsage(entry: WorkerEntry, usage: WorkerUsage): void {
     entry.usage = usage;
     this.router.usage(entry.id, usage);

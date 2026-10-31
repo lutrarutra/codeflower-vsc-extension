@@ -103,7 +103,10 @@ class ChatPanel {
     this.panel.webview.onDidReceiveMessage((message: WebviewMessage) => void this.handle(message));
     this.panel.onDidDispose(options.onDispose);
     this.panel.onDidChangeViewState(() => {
-      if (this.panel.active) this.lastUsed = Date.now();
+      if (!this.panel.active) return;
+      this.lastUsed = Date.now();
+      // The quota may have changed since, e.g. in another chat or window.
+      this.workers.refreshUsage(this.workerId);
     });
   }
 
@@ -525,6 +528,7 @@ export class ChatPanels {
     });
     this.panels.set(this.id(workerId, key), panel);
     this.showUsage(panel);
+    this.workers.refreshUsage(workerId);
     return panel;
   }
 
