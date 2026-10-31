@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 import type { PreviewHostMessage, PreviewState, PreviewWebviewMessage, SandboxFile } from 'codeflower-ui/protocol/messages.ts';
 import { feedbackAnnotations, feedbackFigure, feedbackText } from 'codeflower-ui/chat/lib/feedback.ts';
 import type { ChatPanels } from './chatPanel.ts';
+import { isFileConflict } from 'codeflower-ui/client/codeflower.ts';
 import { WORKSPACE, type ShowRequest } from 'codeflower-ui/client/workerConnection.ts';
 import { InteractiveReport, isStorytellerReport } from './reportPanel.ts';
 import { webviewHtml } from './webviewHtml.ts';
@@ -238,6 +239,23 @@ class PreviewPanel {
         void vscode.window.showInformationMessage(`Saved ${posix.basename(this.file.path)} to ${target.fsPath}`);
         break;
       }
+      case 'write':
+        try {
+          const file = await this.owner.workers.require(this.workerId).writeFile(this.file.path, message.text, message.baseMtimeMs);
+          // The saved text is the file now: no need to read it back.
+          this.file = file;
+          this.data = Buffer.from(message.text, 'utf8').toString('base64');
+          this.error = null;
+          this.post({ type: 'written', file });
+          this.postState();
+        } catch (error) {
+          this.post({ type: 'writeFailed', error: describe(error), conflict: isFileConflict(error) });
+        }
+        break;
+      case 'dirty':
+        // A webview tab cannot ask before it closes: its title says there are edits.
+        this.panel.title = message.dirty ? `● ${this.title}` : this.title;
+        break;
       case 'showChat':
         if (this.chatKey) this.owner.chats.reveal(this.workerId, this.chatKey);
         break;
