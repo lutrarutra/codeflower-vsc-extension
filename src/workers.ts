@@ -30,7 +30,7 @@ export interface WorkerEntry {
   /** Tokens, cost, and quota; the worker sends changes as they happen. */
   usage?: WorkerUsage;
   error?: string;
-  /** Another window took the worker over; it is not reconnected until the user asks. */
+  /** Another window took the worker over (older workers only); it is not reconnected until the user asks. */
   takenOver?: boolean;
 }
 
