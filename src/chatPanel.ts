@@ -141,6 +141,36 @@ class ChatPanel {
     }
   }
 
+  /** A message from the composer: while the agent works it waits for the turn to end, unless sent `now`. */
+  private message(text: string, now: boolean): void {
+    if (!this.state.busy && !this.sending) void this.sendPrompt(text);
+    else if (now) void this.sendNow(this.waiting.enqueueMessage(text).id);
+    else {
+      this.waiting.enqueueMessage(text);
+      this.publishQueue();
+    }
+  }
+
+  /**
+   * A queued prompt, now: into the turn where the agent takes messages while it
+   * works, otherwise first in the queue, and the turn stops so it goes next.
+   */
+  private async sendNow(id: string): Promise<void> {
+    const item = this.waiting.take(id);
+    if (!item) return;
+    // A command or an action is a prompt of its own.
+    if (this.state.steer && item.editable && !item.text.trimStart().startsWith('/')) {
+      this.publishQueue();
+      const connection = this.workers.get(this.workerId)?.connection;
+      // A message the turn could not take is sent another way; no notice for it.
+      if (connection && (await connection.steer(this.key, item.text).catch(() => false))) return;
+    }
+    this.waiting.putFirst(item);
+    this.publishQueue();
+    if (this.state.busy || this.sending) this.workers.get(this.workerId)?.connection?.cancel(this.key);
+    else this.flushWaiting();
+  }
+
   private publishQueue(): void {
     this.post({ type: 'queue', items: this.waiting.summaries() });
   }
@@ -273,7 +303,7 @@ class ChatPanel {
         }
         break;
       case 'prompt':
-        await this.sendPrompt(message.text);
+        this.message(message.text, message.now ?? false);
         break;
       case 'openFile':
         this.onOpenFile(message.path);
@@ -321,9 +351,16 @@ class ChatPanel {
       case 'setAutoApprove':
         if (this.state.agent?.id === 'dsh') this.setState({ autoApprove: message.enabled });
         break;
-      case 'cancel':
+      case 'cancel': {
+        // The user's queued messages go back to the composer instead of after the stop.
+        const messages = this.waiting.takeMessages();
+        if (messages.length) {
+          this.publishQueue();
+          this.post({ type: 'draft', text: messages.map((item) => item.text).join('\n\n') });
+        }
         this.workers.get(this.workerId)?.connection?.cancel(this.key);
         break;
+      }
       case 'permissionResponse':
         this.workers.get(this.workerId)?.connection?.answerPermission(message.requestId, message.optionId);
         break;
@@ -334,6 +371,16 @@ class ChatPanel {
       case 'removeQueued':
         if (this.waiting.remove(message.id)) this.publishQueue();
         break;
+      case 'sendQueued':
+        void this.sendNow(message.id);
+        break;
+      case 'editQueued': {
+        const item = this.waiting.take(message.id);
+        if (!item) break;
+        this.publishQueue();
+        this.post({ type: 'draft', text: item.text });
+        break;
+      }
     }
   }
 }
@@ -501,7 +548,7 @@ export class ChatPanels {
     const panel = this.create(workerId, key, 'New session');
     panel.post({ type: 'transcript', entries: [] });
     panel.post({ type: 'config', options: connection.config(key) });
-    panel.setState({ live: true });
+    panel.setState({ live: true, steer: connection.canSteer });
     void this.workers.refresh(workerId);
   }
 
@@ -539,7 +586,7 @@ export class ChatPanels {
       const activity = connection.activity(key);
       panel.post({ type: 'permission', request: activity.permission });
       panel.post({ type: 'question', request: activity.question });
-      panel.setState({ live: true, busy: activity.busy });
+      panel.setState({ live: true, busy: activity.busy, steer: connection.canSteer });
     } catch (error) {
       panel.loaded(await connection.transcript(key).catch(() => []));
       panel.reportError(error);
@@ -630,7 +677,7 @@ export class ChatPanels {
       panel.notice(
         'info',
         code === TAKEN_OVER
-          ? 'Another VS Code window took over this worker. Choose Reconnect on the worker to take it back.'
+          ? 'Another window took over this worker. Choose Reconnect on the worker to take it back.'
           : agentEnded
             ? 'The worker\'s agent stopped. The chat reconnects when the worker is reachable again.'
             : 'Disconnected from the worker; the agent keeps working. Reconnecting…'
