@@ -4,6 +4,7 @@
 import { posix } from 'node:path';
 import * as vscode from 'vscode';
 import type { PreviewHostMessage, PreviewState, PreviewWebviewMessage, SandboxFile } from 'codeflower-ui/protocol/messages.ts';
+import { feedbackAnnotations, feedbackFigure, feedbackText } from 'codeflower-ui/chat/lib/feedback.ts';
 import type { ChatPanels } from './chatPanel.ts';
 import { WORKSPACE, type ShowRequest } from 'codeflower-ui/client/workerConnection.ts';
 import { InteractiveReport, isStorytellerReport } from './reportPanel.ts';
@@ -195,7 +196,7 @@ class PreviewPanel {
           void vscode.window.showWarningMessage('Open a chat on this worker first; feedback goes to its agent.');
           return;
         }
-        const text = `Feedback on ${displayPath(this.file.path)}, which you showed me in VS Code:\n\n${message.text}`;
+        const text = feedbackText(displayPath(this.file.path), 'VS Code', message.text, feedbackAnnotations(message.annotations), feedbackFigure(message.figure));
         try {
           const outcome = await this.owner.chats.send(this.workerId, this.chatKey, text);
           this.post({ type: 'feedbackSent', queued: outcome === 'queued' });
