@@ -2,6 +2,7 @@
 // and store their login there. code flower only relays what the user types.
 import type { AuthMethod } from '@agentclientprotocol/sdk';
 import * as vscode from 'vscode';
+import { externalUrl } from 'codeflower-ui/client/links.ts';
 import type { UrlElicitation } from 'codeflower-ui/client/workerConnection.ts';
 import type { WorkerManager } from './workers.ts';
 
@@ -104,10 +105,21 @@ export class SignIn {
     this.terminals.delete(terminalId);
   }
 
+  /** A page the agent asks the user to open: only a web page, and the user sees where it goes. */
   async elicitUrl(request: UrlElicitation): Promise<'accept' | 'decline'> {
-    const choice = await vscode.window.showInformationMessage(request.message, { modal: false }, 'Open link', 'Cancel');
-    if (choice !== 'Open link') return 'decline';
-    await vscode.env.openExternal(vscode.Uri.parse(request.url));
+    const page = externalUrl(request.url);
+    if (!page) {
+      void vscode.window.showWarningMessage(`The agent asked to open a link that is not a web page, so it was not opened: ${request.url}`);
+      return 'decline';
+    }
+    const choice = await vscode.window.showInformationMessage(
+      request.message,
+      { modal: true, detail: `Opens ${page.href}` },
+      `Open ${page.host}`,
+      'Cancel'
+    );
+    if (choice !== `Open ${page.host}`) return 'decline';
+    await vscode.env.openExternal(vscode.Uri.parse(page.href, true));
     return 'accept';
   }
 
