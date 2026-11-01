@@ -53,7 +53,9 @@ export interface WorkerRouter {
 }
 
 function serialize(address: WorkerAddress): string {
-  return `codeflower://${address.display}?token=${encodeURIComponent(address.token)}`;
+  // The fingerprint stays with the line: a saved worker reconnects over TLS, pinned.
+  const fingerprint = address.fingerprint ? `&fp=${address.fingerprint}` : '';
+  return `codeflower://${address.display}?token=${encodeURIComponent(address.token)}${fingerprint}`;
 }
 
 export class WorkerManager implements vscode.Disposable {
