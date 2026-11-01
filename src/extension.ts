@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { parseWorkerAddress } from 'codeflower-ui/client/address.ts';
 import { ChatPanels } from './chatPanel.ts';
 import { followDevWorker } from './devWorker.ts';
+import { PluginsPanels } from './pluginsPanel.ts';
 import { PreviewPanels } from './previewPanel.ts';
 import { SignIn } from './signIn.ts';
 import { attentionStatusBar } from './statusBar.ts';
@@ -45,6 +46,7 @@ export function activate(context: vscode.ExtensionContext): void {
   previews = new PreviewPanels(context.extensionUri, workers, panels);
   panels.openFile = (workerId, key, path) => void previews!.openPath(workerId, path, key);
   const tree = new WorkerTree(workers, panels);
+  const plugins = new PluginsPanels(context.extensionUri, workers);
 
   const guarded =
     <T extends unknown[]>(action: (...args: T) => Promise<unknown> | unknown) =>
@@ -89,6 +91,7 @@ export function activate(context: vscode.ExtensionContext): void {
       })
     }),
     workers,
+    plugins,
     attentionStatusBar(panels),
     vscode.window.createTreeView('codeflower.workers', { treeDataProvider: tree, showCollapseAll: true }),
     vscode.commands.registerCommand(
@@ -126,6 +129,7 @@ export function activate(context: vscode.ExtensionContext): void {
       guarded((node: TreeNode) => workers.reconnect(node.workerId))
     ),
     vscode.commands.registerCommand('codeflower.signIn', guarded((node: TreeNode) => runSignIn(node.workerId))),
+    vscode.commands.registerCommand('codeflower.plugins', guarded((node: TreeNode) => plugins.open(node.workerId))),
     vscode.commands.registerCommand(
       'codeflower.newSession',
       guarded((node: TreeNode) => panels!.newSession(node.workerId))

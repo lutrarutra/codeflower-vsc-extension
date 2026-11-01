@@ -99,6 +99,12 @@
         "icon": "$(key)"
       },
       {
+        "command": "codeflower.plugins",
+        "title": "Plugins…",
+        "category": "code flower",
+        "icon": "$(extensions)"
+      },
+      {
         "command": "codeflower.reconnectWorker",
         "title": "Reconnect",
         "category": "code flower",
@@ -155,7 +161,7 @@
       "view/item/context": [
         {
           "command": "codeflower.newSession",
-          "when": "view == codeflower.workers && viewItem == worker.connected",
+          "when": "view == codeflower.workers && viewItem =~ /^worker\\.connected/",
           "group": "inline@1"
         },
         {
@@ -170,13 +176,18 @@
         },
         {
           "command": "codeflower.signIn",
-          "when": "view == codeflower.workers && viewItem == worker.connected",
+          "when": "view == codeflower.workers && viewItem =~ /^worker\\.connected/",
           "group": "worker@1"
         },
         {
-          "command": "codeflower.reconnectWorker",
-          "when": "view == codeflower.workers && viewItem == worker.connected",
+          "command": "codeflower.plugins",
+          "when": "view == codeflower.workers && viewItem == worker.connected.plugins",
           "group": "worker@2"
+        },
+        {
+          "command": "codeflower.reconnectWorker",
+          "when": "view == codeflower.workers && viewItem =~ /^worker\\.connected/",
+          "group": "worker@3"
         },
         {
           "command": "codeflower.renameSession",
@@ -196,6 +207,10 @@
         },
         {
           "command": "codeflower.signIn",
+          "when": "false"
+        },
+        {
+          "command": "codeflower.plugins",
           "when": "false"
         },
         {

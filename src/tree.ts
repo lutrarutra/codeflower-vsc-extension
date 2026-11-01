@@ -260,7 +260,11 @@ export class WorkerTree implements vscode.TreeDataProvider<TreeNode> {
       worker.state === 'connected' ? 'vm-running' : 'vm-outline',
       low && worker.state === 'connected' ? new vscode.ThemeColor('editorWarning.foreground') : color
     );
-    item.contextValue = worker.state === 'connected' ? 'worker.connected' : 'worker.disconnected';
+    // `worker.connected.plugins`: its agent has plugins (`Plugins…`).
+    item.contextValue =
+      worker.state === 'connected'
+        ? `worker.connected${worker.status?.capabilities?.plugins ? '.plugins' : ''}`
+        : 'worker.disconnected';
     return item;
   }
 }

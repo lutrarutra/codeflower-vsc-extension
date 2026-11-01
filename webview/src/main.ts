@@ -1,5 +1,6 @@
 import { mount } from 'svelte';
 import App from 'codeflower-ui/chat/App.svelte';
+import Plugins from 'codeflower-ui/chat/Plugins.svelte';
 import Preview from 'codeflower-ui/chat/Preview.svelte';
 import { postMessageHost } from 'codeflower-ui/chat/lib/host.ts';
 import 'codeflower-ui/chat/app.css';
@@ -27,6 +28,8 @@ if (!target) {
 // One bundle for both webviews; the host names the view on <body>.
 if (document.body.dataset.view === 'preview') {
   mount(Preview, { target, props: { host } });
+} else if (document.body.dataset.view === 'plugins') {
+  mount(Plugins, { target, props: { host } });
 } else {
   mount(App, { target, props: { host } });
 }
