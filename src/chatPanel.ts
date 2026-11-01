@@ -553,6 +553,8 @@ export class ChatPanels {
     panel.post({ type: 'transcript', entries: [] });
     panel.post({ type: 'config', options: connection.config(key) });
     panel.setState({ live: true, steer: connection.canSteer });
+    const notice = connection.mcpNotice(key);
+    if (notice) panel.notice('info', notice);
     void this.workers.refresh(workerId);
   }
 
@@ -591,6 +593,9 @@ export class ChatPanels {
       panel.post({ type: 'permission', request: activity.permission });
       panel.post({ type: 'question', request: activity.question });
       panel.setState({ live: true, busy: activity.busy, steer: connection.canSteer });
+      // MCP servers from the app's config the chat is without, e.g. one that did not start.
+      const notice = connection.mcpNotice(key);
+      if (notice) panel.notice('info', notice);
     } catch (error) {
       panel.loaded(await connection.transcript(key).catch(() => []));
       panel.reportError(error);
