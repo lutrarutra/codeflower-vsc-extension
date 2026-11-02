@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { parseWorkerAddress } from 'codeflower-ui/client/address.ts';
+import { pastedLine } from './pastedLine.ts';
 import { ChatPanels } from './chatPanel.ts';
 import { followDevWorker } from './devWorker.ts';
 import { PluginsPanels } from './pluginsPanel.ts';
@@ -98,19 +99,19 @@ export function activate(context: vscode.ExtensionContext): void {
       'codeflower.connectWorker',
       guarded(async () => {
         const text = await vscode.window.showInputBox({
-          prompt: 'Paste the codeflower://… line the worker printed when it started',
+          prompt: 'Paste the codeflower://… line (or vscode://… link) the worker printed when it started',
           placeHolder: 'codeflower://10.20.3.17:41234?token=…',
           ignoreFocusOut: true,
           validateInput: (value) => {
             try {
-              parseWorkerAddress(value);
+              parseWorkerAddress(pastedLine(value));
               return undefined;
             } catch (error) {
               return message(error);
             }
           }
         });
-        if (text) await connect(text);
+        if (text) await connect(pastedLine(text));
       })
     ),
     vscode.commands.registerCommand('codeflower.refresh', guarded(() => workers.refreshAll())),
