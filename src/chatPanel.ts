@@ -38,6 +38,10 @@ class ChatPanel {
   private readonly queue: HostMessage[] = [];
   // What the chat shows, replayed whenever the webview (re)loads.
   private entries: TranscriptEntry[] = [];
+  /** The index of `entries[0]` in the transcript; earlier ones load when the view asks. */
+  private start = 0;
+  private context: TranscriptEntry[] = [];
+  private loadingEarlier = false;
   private pending: PendingPermission | null = null;
   private question: PendingQuestion | null = null;
   private config: SessionConfigOption[] = [];
@@ -215,10 +219,26 @@ class ChatPanel {
     this.held ??= [];
   }
 
-  loaded(entries: TranscriptEntry[]): void {
+  loaded(page: TranscriptPage): void {
     const held = this.held ?? [];
     this.held = undefined;
-    this.post({ type: 'transcript', entries: [...entries, ...held] });
+    this.post({ type: 'transcript', entries: [...page.entries, ...held], start: page.start, context: page.context });
+  }
+
+  private async loadEarlier(): Promise<void> {
+    const before = this.start;
+    const connection = this.workers.get(this.workerId)?.connection;
+    if (before === 0 || this.loadingEarlier || !connection) return;
+    this.loadingEarlier = true;
+    try {
+      const page = await connection.transcriptPage(this.key, before);
+      // A transcript that arrived meanwhile (a reconnect) replaced the one this page goes before.
+      if (this.start === before) this.post({ type: 'earlier', entries: page.entries, start: page.start });
+    } catch (error) {
+      this.notice('error', `Could not load earlier messages: ${describe(error)}`);
+    } finally {
+      this.loadingEarlier = false;
+    }
   }
 
   post(message: HostMessage): void {
@@ -226,7 +246,14 @@ class ChatPanel {
       this.held.push(message.entry);
       return;
     }
-    if (message.type === 'transcript') this.entries = [...message.entries];
+    if (message.type === 'transcript') {
+      this.entries = [...message.entries];
+      this.start = message.start ?? 0;
+      this.context = message.context ?? [];
+    } else if (message.type === 'earlier') {
+      this.entries = [...message.entries, ...this.entries];
+      this.start = message.start;
+    }
     else if (message.type === 'entry') this.entries.push(message.entry);
     else if (message.type === 'permission') {
       this.pending = message.request;
@@ -295,7 +322,12 @@ class ChatPanel {
       case 'ready':
         this.ready = true;
         void this.panel.webview.postMessage({ type: 'state', state: this.state } satisfies HostMessage);
-        void this.panel.webview.postMessage({ type: 'transcript', entries: this.entries } satisfies HostMessage);
+        void this.panel.webview.postMessage({
+          type: 'transcript',
+          entries: this.entries,
+          start: this.start,
+          context: this.context
+        } satisfies HostMessage);
         void this.panel.webview.postMessage({ type: 'permission', request: this.pending } satisfies HostMessage);
         void this.panel.webview.postMessage({ type: 'question', request: this.question } satisfies HostMessage);
         void this.panel.webview.postMessage({ type: 'config', options: this.config } satisfies HostMessage);
@@ -304,6 +336,9 @@ class ChatPanel {
         for (const queued of this.queue.splice(0)) {
           if (queued.type === 'notice') void this.panel.webview.postMessage(queued);
         }
+        break;
+      case 'loadEarlier':
+        await this.loadEarlier();
         break;
       case 'prompt':
         this.message(message.text, message.now ?? false);
@@ -314,7 +349,10 @@ class ChatPanel {
       case 'fileData': {
         let dataUrl: string | null = null;
         try {
-          const file = await this.workers.require(this.workerId).readFile(message.path);
+          const connection = this.workers.require(this.workerId);
+          const file = message.thumbnail
+            ? await connection.thumbnail(message.path, message.thumbnail)
+            : await connection.readFile(message.path);
           dataUrl = `data:${file.mimeType};base64,${file.data}`;
         } catch {
           dataUrl = null;
@@ -579,15 +617,14 @@ export class ChatPanels {
     const connection = this.workers.require(workerId);
     const session = this.workers.get(workerId)?.sessions.find((candidate) => candidate.key === key);
     if (!session) {
-      panel.loaded(await connection.transcript(key));
+      panel.loaded(await connection.transcriptPage(key));
       return;
     }
     panel.hold();
     try {
       const attached = await connection.resumeSession(session.nativeSessionId, session.cwd);
-      const entries = await connection.transcript(key);
       // Updates after the attach came live; the transcript has them too.
-      panel.loaded(attached.transcriptEntries === undefined ? entries : entries.slice(0, attached.transcriptEntries));
+      panel.loaded(pageUpTo(await connection.transcriptPage(key), attached.transcriptEntries));
       panel.post({ type: 'config', options: connection.config(key) });
       const activity = connection.activity(key);
       panel.post({ type: 'permission', request: activity.permission });

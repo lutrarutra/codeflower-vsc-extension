@@ -105,7 +105,7 @@ class PreviewPanel {
   private load(): Promise<void> {
     this.loading ??= (async () => {
       try {
-        const file = await this.owner.workers.require(this.workerId).readFile(this.file.path);
+        const file = await this.owner.workers.require(this.workerId).readPreview(this.file.path);
         const { data, ...info } = file;
         this.file = info;
         this.data = data;
@@ -295,9 +295,9 @@ export class PreviewPanels {
     return existing?.panel.viewColumn ?? vscode.ViewColumn.Beside;
   }
 
-  /** The agent ran `codeflower-show`. */
+  /** The agent ran `codeflower-show`, or asks to approve a plan in a chat. */
   show(workerId: string, request: ShowRequest): void {
-    const chatKey = this.chats.chatFor(workerId);
+    const chatKey = request.sessionKey ?? this.chats.chatFor(workerId);
     if (chatKey) {
       void this.workers
         .get(workerId)
