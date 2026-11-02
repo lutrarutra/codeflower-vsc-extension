@@ -1,6 +1,7 @@
 import type { SessionConfigOption } from '@agentclientprotocol/sdk';
 import * as vscode from 'vscode';
 import type { ChatAction, PendingPermission, PendingQuestion, TranscriptEntry } from 'codeflower-ui/protocol/messages.ts';
+import type { SubagentSettingsState, SubagentSummary } from 'codeflower-ui/protocol/subagents.ts';
 import type { WorkerUsage } from 'codeflower-ui/protocol/usage.ts';
 import { parseWorkerAddress, type WorkerAddress } from 'codeflower-ui/client/address.ts';
 import {
@@ -30,6 +31,8 @@ export interface WorkerEntry {
   sessions: SessionRecord[];
   /** Tokens, cost, and quota; the worker sends changes as they happen. */
   usage?: WorkerUsage;
+  /** The defaults of its agent's subagents; missing when it has none in code flower. */
+  subagentSettings?: SubagentSettingsState;
   error?: string;
   /** Another window took the worker over (older workers only); it is not reconnected until the user asks. */
   takenOver?: boolean;
@@ -50,6 +53,10 @@ export interface WorkerRouter {
   terminalOutput(terminalId: string, data: string): void;
   terminalExit(terminalId: string, exitCode: number): void;
   usage(workerId: string, usage: WorkerUsage): void;
+  /** One of a chat's subagents changed. */
+  subagent(workerId: string, subagent: SubagentSummary): void;
+  /** The defaults of the worker's subagents changed. */
+  subagentSettings(workerId: string): void;
   /** Connected (again): open chats attach to the worker's agent. */
   connected(workerId: string): Promise<void>;
   disconnected(workerId: string, code: number): void;
@@ -234,6 +241,12 @@ export class WorkerManager implements vscode.Disposable {
               this.setUsage(entry, usage);
             },
             wrapUp: (notice) => this.warnWrapUp(entry, notice),
+            subagent: (_parentKey, subagent) => this.router.subagent(entry.id, subagent),
+            subagentSettings: (state) => {
+              if (entry.connection !== connection) return;
+              entry.subagentSettings = state;
+              this.router.subagentSettings(entry.id);
+            },
             closed: (reason, code) => {
               if (entry.connection !== connection) return;
               entry.connection = undefined;
@@ -262,6 +275,8 @@ export class WorkerManager implements vscode.Disposable {
         // Later changes come as notifications.
         const usage = await connection.usage().catch(() => undefined);
         if (usage && entry.connection === connection) this.setUsage(entry, usage);
+        entry.subagentSettings = connection.subagentFeatures ? await connection.subagentSettings().catch(() => undefined) : undefined;
+        this.router.subagentSettings(entry.id);
         await this.router.connected(entry.id);
         return;
       } catch (error) {

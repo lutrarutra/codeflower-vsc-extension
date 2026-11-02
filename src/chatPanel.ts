@@ -17,6 +17,12 @@ import {
 import { PromptQueue } from 'codeflower-ui/client/promptQueue.ts';
 import type { ChatUsage } from 'codeflower-ui/protocol/usage.ts';
 import {
+  subagentTitle,
+  withSubagent,
+  type SubagentSettingsState,
+  type SubagentSummary
+} from 'codeflower-ui/protocol/subagents.ts';
+import {
   EMPTY_TRANSCRIPT,
   type ChatTerminal,
   isAuthRequired,
@@ -55,6 +61,10 @@ class ChatPanel {
   private question: PendingQuestion | null = null;
   private config: SessionConfigOption[] = [];
   private usage: ChatUsage = { session: null, account: null };
+  /** The chat's subagents, and the worker's defaults for them. */
+  subagents: SubagentSummary[] = [];
+  private subagentSettings: SubagentSettingsState | null = null;
+  private readonly openSubagent: (key: string) => void;
   private readonly extensionUri: vscode.Uri;
   private status: SessionStatus | undefined;
   private readonly onStatus: () => void;
@@ -84,6 +94,9 @@ class ChatPanel {
     onStatus: () => void;
     onOpenFile: (path: string) => void;
     onConfigChosen: (configId: string, value: string | boolean) => void;
+    /** Shows a subagent's chat, or this subagent chat's parent. */
+    onOpenSubagent: (key: string) => void;
+    subagent?: ChatState['subagent'];
   }) {
     this.workers = options.workers;
     this.signIn = options.signIn;
@@ -96,8 +109,10 @@ class ChatPanel {
       actions: options.actions,
       autoApprove: options.agent?.id === 'dsh' ? true : undefined,
       live: false,
-      busy: false
+      busy: false,
+      ...(options.subagent ? { subagent: options.subagent } : {})
     };
+    this.openSubagent = options.onOpenSubagent;
     if (this.state.autoApprove !== undefined) {
       this.workers.get(this.workerId)?.connection?.setAutoApprove(this.key, this.state.autoApprove);
     }
@@ -129,6 +144,11 @@ class ChatPanel {
 
   get busy(): boolean {
     return this.state.busy;
+  }
+
+  /** The subagent this chat shows, when it is a subagent's. */
+  get subagent(): ChatState['subagent'] {
+    return this.state.subagent;
   }
 
   /** Sends a message to the agent as if typed here; it waits while the agent works. */
@@ -273,6 +293,8 @@ class ChatPanel {
     }
     else if (message.type === 'config') this.config = message.options;
     else if (message.type === 'usage') this.usage = message.usage;
+    else if (message.type === 'subagents') this.subagents = message.subagents;
+    else if (message.type === 'subagentSettings') this.subagentSettings = message.state;
     if (!this.ready) {
       this.queue.push(message);
       return;
@@ -342,6 +364,8 @@ class ChatPanel {
         void this.panel.webview.postMessage({ type: 'config', options: this.config } satisfies HostMessage);
         void this.panel.webview.postMessage({ type: 'usage', usage: this.usage } satisfies HostMessage);
         void this.panel.webview.postMessage({ type: 'queue', items: this.waiting.summaries() } satisfies HostMessage);
+        void this.panel.webview.postMessage({ type: 'subagents', subagents: this.subagents } satisfies HostMessage);
+        void this.panel.webview.postMessage({ type: 'subagentSettings', state: this.subagentSettings } satisfies HostMessage);
         for (const queued of this.queue.splice(0)) {
           if (queued.type === 'notice') void this.panel.webview.postMessage(queued);
         }
@@ -431,6 +455,37 @@ class ChatPanel {
         this.post({ type: 'draft', text: item.text });
         break;
       }
+      case 'openSubagent':
+        this.openSubagent(message.key);
+        break;
+      case 'openParent':
+        if (this.state.subagent) this.openSubagent(this.state.subagent.parentKey);
+        break;
+      case 'stopSubagent':
+        try {
+          await this.workers.require(this.workerId).cancelSubagent(message.key);
+        } catch (error) {
+          this.reportError(error);
+        }
+        break;
+      case 'subagentSettings':
+        try {
+          const connection = this.workers.require(this.workerId);
+          const state = await connection.subagentSettings(message.settings);
+          const worker = this.workers.get(this.workerId);
+          if (worker) worker.subagentSettings = state;
+          this.post({ type: 'subagentSettings', state });
+        } catch (error) {
+          this.reportError(error);
+        }
+        break;
+      case 'restartAgent':
+        try {
+          await this.workers.require(this.workerId).restartAgent();
+        } catch (error) {
+          this.reportError(error);
+        }
+        break;
     }
   }
 }
@@ -454,6 +509,8 @@ export class ChatPanels {
   private readonly terminalsByWorker = new Map<string, Record<string, ChatTerminal>>();
   /** The terminal notice each panel shows, so it is posted once and cleared when the terminal goes. */
   private readonly terminalNotices = new Map<ChatPanel, string>();
+  /** The subagents of the chats open here, by worker and their chats' keys. */
+  private readonly subagentsByWorker = new Map<string, Map<string, SubagentSummary>>();
   private readonly statusChanged = new vscode.EventEmitter<void>();
   /** A session started or stopped working or waiting for the user. */
   readonly onDidChangeStatus = this.statusChanged.event;
@@ -557,7 +614,7 @@ export class ChatPanels {
     panel?.panel.reveal();
   }
 
-  private create(workerId: string, key: string, title: string): ChatPanel {
+  private create(workerId: string, key: string, title: string, subagent?: SubagentSummary): ChatPanel {
     const worker = this.workers.get(workerId);
     const panel = new ChatPanel({
       extensionUri: this.extensionUri,
@@ -572,15 +629,20 @@ export class ChatPanels {
       onDispose: () => {
         this.panels.delete(this.id(workerId, panel.key));
         this.terminalNotices.delete(panel);
+        // A subagent's updates stop coming once no chat of it is open.
+        if (panel.subagent) void this.workers.get(workerId)?.connection?.closeSubagent(panel.key).catch(() => undefined);
         this.statusChanged.fire();
       },
       onStatus: () => this.statusChanged.fire(),
       onOpenFile: (path) => this.openFile(workerId, panel.key, path),
-      onConfigChosen: (configId, value) => this.rememberConfig(workerId, panel.key, configId, value)
+      onConfigChosen: (configId, value) => this.rememberConfig(workerId, panel.key, configId, value),
+      onOpenSubagent: (target) => void this.open(workerId, target).catch((error) => panel.reportError(error)),
+      ...(subagent ? { subagent: this.subagentState(workerId, subagent) } : {})
     });
     this.panels.set(this.id(workerId, key), panel);
     this.showUsage(panel);
     this.workers.refreshUsage(workerId);
+    panel.post({ type: 'subagentSettings', state: worker?.subagentSettings ?? null });
     return panel;
   }
 
@@ -618,7 +680,8 @@ export class ChatPanels {
     }
     const session = this.workers.get(workerId)?.sessions.find((candidate) => candidate.key === key);
     this.workers.require(workerId);
-    const panel = this.create(workerId, key, session?.title ?? 'Session');
+    const subagent = session ? undefined : this.subagentsByWorker.get(workerId)?.get(key);
+    const panel = this.create(workerId, key, session?.title ?? (subagent ? subagentTitle(subagent) : 'Session'), subagent);
     await this.attach(panel);
   }
 
@@ -629,6 +692,7 @@ export class ChatPanels {
   private async attach(panel: ChatPanel): Promise<void> {
     const { workerId, key } = panel;
     const connection = this.workers.require(workerId);
+    if (panel.subagent) return this.attachSubagent(panel);
     const session = this.workers.get(workerId)?.sessions.find((candidate) => candidate.key === key);
     if (!session) {
       panel.loaded(await connection.transcriptPage(key));
@@ -648,10 +712,66 @@ export class ChatPanels {
       const notice = connection.mcpNotice(key);
       if (notice) panel.notice('info', notice);
       this.noticeTerminal(panel);
+      void this.loadSubagents(panel);
     } catch (error) {
       panel.loaded(await connection.transcriptPage(key).catch(() => EMPTY_TRANSCRIPT));
       panel.reportError(error);
     }
+  }
+
+  // ---- subagents ----
+
+  /** A subagent's chat: what it recorded so far, then its updates live while it runs. */
+  private async attachSubagent(panel: ChatPanel): Promise<void> {
+    const { workerId, key } = panel;
+    const connection = this.workers.require(workerId);
+    panel.hold();
+    try {
+      const opened = await connection.openSubagent(key);
+      panel.loaded(pageUpTo(await connection.transcriptPage(key), opened.transcriptEntries));
+      if (opened.subagent) this.subagentChanged(workerId, opened.subagent);
+      void this.loadSubagents(panel);
+    } catch (error) {
+      panel.loaded(await connection.transcriptPage(key).catch(() => EMPTY_TRANSCRIPT));
+      panel.reportError(error);
+    }
+  }
+
+  /** A chat's subagents, for its cards and its badge. */
+  private async loadSubagents(panel: ChatPanel): Promise<void> {
+    const connection = this.workers.get(panel.workerId)?.connection;
+    if (!connection?.subagentFeatures) return;
+    const subagents = await connection.subagents(panel.key).catch(() => undefined);
+    if (!subagents) return;
+    for (const subagent of subagents) this.knownSubagents(panel.workerId).set(subagent.key, subagent);
+    panel.post({ type: 'subagents', subagents });
+  }
+
+  private knownSubagents(workerId: string): Map<string, SubagentSummary> {
+    let known = this.subagentsByWorker.get(workerId);
+    if (!known) this.subagentsByWorker.set(workerId, (known = new Map()));
+    return known;
+  }
+
+  private subagentState(workerId: string, subagent: SubagentSummary): ChatState['subagent'] {
+    const parent =
+      this.panels.get(this.id(workerId, subagent.parentKey))?.title ??
+      this.workers.get(workerId)?.sessions.find((session) => session.key === subagent.parentKey)?.title;
+    return { ...subagent, ...(parent ? { parentTitle: parent } : {}) };
+  }
+
+  /** One of a chat's subagents changed: its parent's cards and its own chat follow. */
+  subagentChanged(workerId: string, subagent: SubagentSummary): void {
+    this.knownSubagents(workerId).set(subagent.key, subagent);
+    const parent = this.panels.get(this.id(workerId, subagent.parentKey));
+    parent?.post({ type: 'subagents', subagents: withSubagent(parent.subagents, subagent) });
+    this.panels.get(this.id(workerId, subagent.key))?.setState({ subagent: this.subagentState(workerId, subagent) });
+  }
+
+  /** The worker's defaults for subagents changed, or it connected. */
+  subagentSettings(workerId: string): void {
+    const state = this.workers.get(workerId)?.subagentSettings ?? null;
+    for (const panel of this.panels.values()) if (panel.workerId === workerId) panel.post({ type: 'subagentSettings', state });
   }
 
   terminals(workerId: string, terminals: ChatTerminal[]): void {
