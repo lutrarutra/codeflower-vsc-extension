@@ -70,6 +70,7 @@ class ChatPanel {
   private readonly onStatus: () => void;
   private readonly onOpenFile: (path: string) => void;
   private readonly onConfigChosen: (configId: string, value: string | boolean) => void;
+  private readonly onFoldSteps: (fold: boolean) => void;
   /** When the user last wrote here or looked at the tab; feedback from previews goes to the latest. */
   lastUsed = Date.now();
   /** The user's `!commands` running now; files they show belong to this chat. */
@@ -94,6 +95,9 @@ class ChatPanel {
     onStatus: () => void;
     onOpenFile: (path: string) => void;
     onConfigChosen: (configId: string, value: string | boolean) => void;
+    /** Whether chats fold each turn's steps, and the user's choice of it (for every chat). */
+    foldSteps: boolean;
+    onFoldSteps: (fold: boolean) => void;
     /** Shows a subagent's chat, or this subagent chat's parent. */
     onOpenSubagent: (key: string) => void;
     subagent?: ChatState['subagent'];
@@ -110,6 +114,7 @@ class ChatPanel {
       autoApprove: options.agent?.id === 'dsh' ? true : undefined,
       live: false,
       busy: false,
+      foldSteps: options.foldSteps,
       ...(options.subagent ? { subagent: options.subagent } : {})
     };
     this.openSubagent = options.onOpenSubagent;
@@ -126,6 +131,7 @@ class ChatPanel {
     this.onStatus = options.onStatus;
     this.onOpenFile = options.onOpenFile;
     this.onConfigChosen = options.onConfigChosen;
+    this.onFoldSteps = options.onFoldSteps;
     this.showStatus();
     this.panel.webview.html = webviewHtml(this.panel.webview, assets, 'chat');
     this.panel.webview.onDidReceiveMessage((message: WebviewMessage) => void this.handle(message));
@@ -425,6 +431,9 @@ class ChatPanel {
       case 'setAutoApprove':
         if (this.state.agent?.id === 'dsh') this.setState({ autoApprove: message.enabled });
         break;
+      case 'foldSteps':
+        this.onFoldSteps(message.fold);
+        break;
       case 'cancel': {
         // The user's queued messages go back to the composer instead of after the stop.
         const messages = this.waiting.takeMessages();
@@ -503,6 +512,8 @@ export function tabTitle(title: string): string {
 }
 
 /** Opens chat tabs and routes live agent traffic to them. */
+const FOLD_STEPS_KEY = 'codeflower.foldSteps';
+
 export class ChatPanels {
   private readonly panels = new Map<string, ChatPanel>();
   /** Chats open in the agent's own terminal UI (`codeflower attach`), by worker and key. */
@@ -520,7 +531,7 @@ export class ChatPanels {
   /** Shows a file from the worker's sandbox; set once the previews exist. */
   openFile: (workerId: string, key: string, path: string) => void = () => {};
 
-  /** Remembers the user's last mode per agent for new sessions. */
+  /** Remembers the user's last mode per agent for new sessions, and whether chats fold their steps. */
   private readonly memento: vscode.Memento;
 
   constructor(
@@ -533,6 +544,16 @@ export class ChatPanels {
     this.workers = workers;
     this.signIn = signIn;
     this.memento = memento;
+  }
+
+  /** Chats show every step unless the user folds them; the choice holds for every chat. */
+  private get foldSteps(): boolean {
+    return this.memento.get<boolean>(FOLD_STEPS_KEY) ?? false;
+  }
+
+  private setFoldSteps(fold: boolean): void {
+    void this.memento.update(FOLD_STEPS_KEY, fold);
+    for (const panel of this.panels.values()) panel.setState({ foldSteps: fold });
   }
 
   private modeKey(workerId: string): string | undefined {
@@ -636,6 +657,8 @@ export class ChatPanels {
       onStatus: () => this.statusChanged.fire(),
       onOpenFile: (path) => this.openFile(workerId, panel.key, path),
       onConfigChosen: (configId, value) => this.rememberConfig(workerId, panel.key, configId, value),
+      foldSteps: this.foldSteps,
+      onFoldSteps: (fold) => this.setFoldSteps(fold),
       onOpenSubagent: (target) => void this.open(workerId, target).catch((error) => panel.reportError(error)),
       ...(subagent ? { subagent: this.subagentState(workerId, subagent) } : {})
     });
