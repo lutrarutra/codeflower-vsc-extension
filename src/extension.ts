@@ -29,6 +29,7 @@ export function activate(context: vscode.ExtensionContext): void {
     elicitUrl: async (_workerId, request) => (signIn ? signIn.elicitUrl(request) : 'decline'),
     elicitationComplete: () => {},
     show: (workerId, request) => previews?.show(workerId, request),
+    terminals: (workerId, terminals) => panels?.terminals(workerId, terminals),
     terminalOutput: (terminalId, data) => signIn?.terminalOutput(terminalId, data),
     terminalExit: (terminalId, exitCode) => signIn?.terminalExit(terminalId, exitCode),
     usage: (workerId) => panels?.usage(workerId),

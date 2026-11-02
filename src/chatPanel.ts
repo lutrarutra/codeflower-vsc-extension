@@ -16,7 +16,16 @@ import {
 } from 'codeflower-ui/protocol/messages.ts';
 import { PromptQueue } from 'codeflower-ui/client/promptQueue.ts';
 import type { ChatUsage } from 'codeflower-ui/protocol/usage.ts';
-import { isAuthRequired, isConnectionClosed, RpcError, TAKEN_OVER } from 'codeflower-ui/client/workerConnection.ts';
+import {
+  EMPTY_TRANSCRIPT,
+  type ChatTerminal,
+  isAuthRequired,
+  isConnectionClosed,
+  pageUpTo,
+  RpcError,
+  TAKEN_OVER,
+  type TranscriptPage
+} from 'codeflower-ui/client/workerConnection.ts';
 import { webviewHtml } from './webviewHtml.ts';
 import type { WorkerManager } from './workers.ts';
 
@@ -441,6 +450,10 @@ export function tabTitle(title: string): string {
 /** Opens chat tabs and routes live agent traffic to them. */
 export class ChatPanels {
   private readonly panels = new Map<string, ChatPanel>();
+  /** Chats open in the agent's own terminal UI (`codeflower attach`), by worker and key. */
+  private readonly terminalsByWorker = new Map<string, Record<string, ChatTerminal>>();
+  /** The terminal notice each panel shows, so it is posted once and cleared when the terminal goes. */
+  private readonly terminalNotices = new Map<ChatPanel, string>();
   private readonly statusChanged = new vscode.EventEmitter<void>();
   /** A session started or stopped working or waiting for the user. */
   readonly onDidChangeStatus = this.statusChanged.event;
@@ -558,6 +571,7 @@ export class ChatPanels {
       agent: agentPresentation(worker?.status?.agent, { name: worker?.status?.agentLabel, ...worker?.status?.agentInfo }),
       onDispose: () => {
         this.panels.delete(this.id(workerId, panel.key));
+        this.terminalNotices.delete(panel);
         this.statusChanged.fire();
       },
       onStatus: () => this.statusChanged.fire(),
@@ -633,15 +647,50 @@ export class ChatPanels {
       // MCP servers from the app's config the chat is without, e.g. one that did not start.
       const notice = connection.mcpNotice(key);
       if (notice) panel.notice('info', notice);
+      this.noticeTerminal(panel);
     } catch (error) {
-      panel.loaded(await connection.transcript(key).catch(() => []));
+      panel.loaded(await connection.transcriptPage(key).catch(() => EMPTY_TRANSCRIPT));
       panel.reportError(error);
     }
+  }
+
+  terminals(workerId: string, terminals: ChatTerminal[]): void {
+    this.terminalsByWorker.set(workerId, Object.fromEntries(terminals.map((terminal) => [terminal.sessionKey, terminal])));
+    for (const panel of this.panels.values()) if (panel.workerId === workerId) this.noticeTerminal(panel);
+  }
+
+  /**
+   * A chat open in the agent's terminal UI says so, as on the app's page:
+   * Claude Code's has the chat (what is sent here is typed there), the others
+   * share it.
+   */
+  private noticeTerminal(panel: ChatPanel): void {
+    const terminal = this.terminalsByWorker.get(panel.workerId)?.[panel.key];
+    const shown = this.terminalNotices.get(panel);
+    if (!terminal) {
+      if (shown !== undefined) panel.post({ type: 'clearNotice' });
+      this.terminalNotices.delete(panel);
+      return;
+    }
+    const id = `${terminal.terminalId}:${terminal.mode}`;
+    if (shown === id) return;
+    this.terminalNotices.set(panel, id);
+    const agent = this.workers.get(panel.workerId)?.status?.agentLabel ?? 'the agent';
+    // VS Code knows the worker by its address, which `codeflower attach` does not take: its picker finds the chat.
+    const command = ' In a terminal on its computer, `codeflower attach` opens it.';
+    panel.notice(
+      'info',
+      terminal.mode === 'handoff'
+        ? `This chat is open in ${agent}'s own terminal UI. What you send here is typed there (text only), and permissions are answered there; quit it there (~q) to go on here.${command}`
+        : `This chat is also open in ${agent}'s own terminal UI; both follow it as it goes.${command}`
+    );
   }
 
   /** The worker is back: its open chats attach again and show what happened meanwhile. */
   async reconnected(workerId: string): Promise<void> {
     const panels = [...this.panels.values()].filter((panel) => panel.workerId === workerId);
+    // The worker tells which chats have a terminal again; notices after the disconnect one are posted anew.
+    for (const panel of panels) this.terminalNotices.delete(panel);
     for (const panel of panels) panel.setState({ actions: this.workers.get(workerId)?.actions });
     await Promise.all(panels.map((panel) => this.attach(panel).catch((error) => panel.reportError(error))));
   }

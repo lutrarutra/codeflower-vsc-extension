@@ -6,6 +6,7 @@ import { parseWorkerAddress, type WorkerAddress } from 'codeflower-ui/client/add
 import {
   TAKEN_OVER,
   WorkerConnection,
+  type ChatTerminal,
   type SessionRecord,
   type ShowRequest,
   type UrlElicitation,
@@ -44,6 +45,8 @@ export interface WorkerRouter {
   elicitUrl(workerId: string, request: UrlElicitation): Promise<'accept' | 'decline'>;
   elicitationComplete(workerId: string, elicitationId: string): void;
   show(workerId: string, request: ShowRequest): void;
+  /** The chats open in the agent's own terminal UI (`codeflower attach`): on connect, and when that changes. */
+  terminals(workerId: string, terminals: ChatTerminal[]): void;
   terminalOutput(terminalId: string, data: string): void;
   terminalExit(terminalId: string, exitCode: number): void;
   usage(workerId: string, usage: WorkerUsage): void;
@@ -223,6 +226,7 @@ export class WorkerManager implements vscode.Disposable {
             elicitUrl: (request) => this.router.elicitUrl(entry.id, request),
             elicitationComplete: (elicitationId) => this.router.elicitationComplete(entry.id, elicitationId),
             show: (request) => this.router.show(entry.id, request),
+            terminals: (terminals) => this.router.terminals(entry.id, terminals),
             terminalOutput: (terminalId, data) => this.router.terminalOutput(terminalId, data),
             terminalExit: (terminalId, exitCode) => this.router.terminalExit(terminalId, exitCode),
             usage: (usage) => {
