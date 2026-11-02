@@ -70,7 +70,7 @@
     "viewsWelcome": [
       {
         "view": "codeflower.workers",
-        "contents": "Start a worker with `codeflower interactive --agent claude|codex|dsh …`, then paste the codeflower:// line it prints.\n[Connect to worker](command:codeflower.connectWorker)"
+        "contents": "Start a worker with `codeflower sandbox --agent claude|codex|dsh …`, then paste the codeflower:// line it prints.\n[Connect to worker](command:codeflower.connectWorker)"
       }
     ],
     "commands": [
