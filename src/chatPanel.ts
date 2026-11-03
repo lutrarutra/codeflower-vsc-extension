@@ -24,6 +24,7 @@ import {
 } from 'codeflower-ui/protocol/subagents.ts';
 import {
   EMPTY_TRANSCRIPT,
+  type AttachedSession,
   type ChatTerminal,
   isAuthRequired,
   isConnectionClosed,
@@ -671,9 +672,9 @@ export class ChatPanels {
 
   async newSession(workerId: string): Promise<void> {
     const connection = this.workers.require(workerId);
-    let key: string;
+    let started: AttachedSession;
     try {
-      key = await connection.newSession();
+      started = await connection.startSession();
     } catch (error) {
       if (isAuthRequired(error)) {
         const choice = await vscode.window.showWarningMessage(
@@ -685,9 +686,16 @@ export class ChatPanels {
       }
       throw error;
     }
-    await this.applyRememberedMode(workerId, key);
+    const { key, transcriptEntries } = started;
+    // Created before anything else is awaited, so no live update finds it missing.
     const panel = this.create(workerId, key, 'New session');
-    panel.post({ type: 'transcript', entries: [] });
+    if (transcriptEntries) {
+      panel.hold();
+      panel.loaded(pageUpTo(await connection.transcriptPage(key).catch(() => EMPTY_TRANSCRIPT), transcriptEntries));
+    } else {
+      panel.post({ type: 'transcript', entries: [] });
+    }
+    await this.applyRememberedMode(workerId, key);
     panel.post({ type: 'config', options: connection.config(key) });
     panel.setState({ live: true, steer: connection.canSteer });
     const notice = connection.mcpNotice(key);
