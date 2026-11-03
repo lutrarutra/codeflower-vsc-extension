@@ -72,6 +72,7 @@ class ChatPanel {
   private readonly onOpenFile: (path: string) => void;
   private readonly onConfigChosen: (configId: string, value: string | boolean) => void;
   private readonly onFoldSteps: (fold: boolean) => void;
+  private readonly onFavoriteModel: (value: string, pinned: boolean) => void;
   /** When the user last wrote here or looked at the tab; feedback from previews goes to the latest. */
   lastUsed = Date.now();
   /** The user's `!commands` running now; files they show belong to this chat. */
@@ -99,6 +100,9 @@ class ChatPanel {
     /** Whether chats fold each turn's steps, and the user's choice of it (for every chat). */
     foldSteps: boolean;
     onFoldSteps: (fold: boolean) => void;
+    /** The models the user pinned for this chat's agent, and pinning one (for every chat of the agent). */
+    favoriteModels: string[];
+    onFavoriteModel: (value: string, pinned: boolean) => void;
     /** Shows a subagent's chat, or this subagent chat's parent. */
     onOpenSubagent: (key: string) => void;
     subagent?: ChatState['subagent'];
@@ -116,6 +120,7 @@ class ChatPanel {
       live: false,
       busy: false,
       foldSteps: options.foldSteps,
+      favoriteModels: options.favoriteModels,
       ...(options.subagent ? { subagent: options.subagent } : {})
     };
     this.openSubagent = options.onOpenSubagent;
@@ -133,6 +138,7 @@ class ChatPanel {
     this.onOpenFile = options.onOpenFile;
     this.onConfigChosen = options.onConfigChosen;
     this.onFoldSteps = options.onFoldSteps;
+    this.onFavoriteModel = options.onFavoriteModel;
     this.showStatus();
     this.panel.webview.html = webviewHtml(this.panel.webview, assets, 'chat');
     this.panel.webview.onDidReceiveMessage((message: WebviewMessage) => void this.handle(message));
@@ -435,6 +441,9 @@ class ChatPanel {
       case 'foldSteps':
         this.onFoldSteps(message.fold);
         break;
+      case 'favoriteModel':
+        this.onFavoriteModel(message.value, message.favorite);
+        break;
       case 'cancel': {
         // The user's queued messages go back to the composer instead of after the stop.
         const messages = this.waiting.takeMessages();
@@ -514,6 +523,8 @@ export function tabTitle(title: string): string {
 
 /** Opens chat tabs and routes live agent traffic to them. */
 const FOLD_STEPS_KEY = 'codeflower.foldSteps';
+/** The models pinned in the model picker, by agent (their values are the agent's own). */
+const FAVORITE_MODELS_KEY = 'codeflower.favoriteModels';
 
 export class ChatPanels {
   private readonly panels = new Map<string, ChatPanel>();
@@ -555,6 +566,22 @@ export class ChatPanels {
   private setFoldSteps(fold: boolean): void {
     void this.memento.update(FOLD_STEPS_KEY, fold);
     for (const panel of this.panels.values()) panel.setState({ foldSteps: fold });
+  }
+
+  private favoriteModels(agent: string | undefined): string[] {
+    return (agent && this.memento.get<Record<string, string[]>>(FAVORITE_MODELS_KEY)?.[agent]) || [];
+  }
+
+  /** Pins a model, or unpins it, in every chat of the agent. */
+  private setFavoriteModel(agent: string | undefined, value: string, pinned: boolean): void {
+    if (!agent) return;
+    const all = this.memento.get<Record<string, string[]>>(FAVORITE_MODELS_KEY) ?? {};
+    const others = (all[agent] ?? []).filter((model) => model !== value);
+    const next = pinned ? [...others, value] : others;
+    void this.memento.update(FAVORITE_MODELS_KEY, { ...all, [agent]: next });
+    for (const panel of this.panels.values()) {
+      if (this.workers.get(panel.workerId)?.status?.agent === agent) panel.setState({ favoriteModels: next });
+    }
   }
 
   private modeKey(workerId: string): string | undefined {
@@ -660,6 +687,8 @@ export class ChatPanels {
       onConfigChosen: (configId, value) => this.rememberConfig(workerId, panel.key, configId, value),
       foldSteps: this.foldSteps,
       onFoldSteps: (fold) => this.setFoldSteps(fold),
+      favoriteModels: this.favoriteModels(worker?.status?.agent),
+      onFavoriteModel: (value, pinned) => this.setFavoriteModel(this.workers.get(workerId)?.status?.agent, value, pinned),
       onOpenSubagent: (target) => void this.open(workerId, target).catch((error) => panel.reportError(error)),
       ...(subagent ? { subagent: this.subagentState(workerId, subagent) } : {})
     });
