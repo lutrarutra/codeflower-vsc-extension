@@ -1,9 +1,9 @@
 import * as vscode from 'vscode';
 import type { SessionConfigOption } from '@agentclientprotocol/sdk';
 import {
-  agentPresentation,
   sessionStatus,
   type ActionPromptMeta,
+  type AgentName,
   type AgentPresentation,
   type ChatAction,
   type ChatState,
@@ -23,6 +23,7 @@ import {
   type SubagentSummary
 } from 'codeflower-ui/protocol/subagents.ts';
 import {
+  agentOfKey,
   EMPTY_TRANSCRIPT,
   type AttachedSession,
   type ChatTerminal,
@@ -46,7 +47,7 @@ function describe(error: unknown): string {
 class ChatPanel {
   readonly panel: vscode.WebviewPanel;
   private readonly workers: WorkerManager;
-  private readonly signIn: (workerId: string) => Promise<void>;
+  private readonly signIn: (workerId: string, agent: AgentName) => Promise<void>;
   readonly workerId: string;
   key: string;
   private state: ChatState;
@@ -86,7 +87,7 @@ class ChatPanel {
   constructor(options: {
     extensionUri: vscode.Uri;
     workers: WorkerManager;
-    signIn: (workerId: string) => Promise<void>;
+    signIn: (workerId: string, agent: AgentName) => Promise<void>;
     workerId: string;
     key: string;
     title: string;
@@ -147,7 +148,7 @@ class ChatPanel {
       if (!this.panel.active) return;
       this.lastUsed = Date.now();
       // The quota may have changed since, e.g. in another chat or window.
-      this.workers.refreshUsage(this.workerId);
+      this.workers.refreshUsage(this.workerId, agentOfKey(this.key));
     });
   }
 
@@ -423,7 +424,7 @@ class ChatPanel {
       case 'questionResponse':
         this.workers
           .get(this.workerId)
-          ?.connection?.answerQuestion(message.requestId, message.action, message.content);
+          ?.connection?.answerQuestion(this.key, message.requestId, message.action, message.content);
         break;
       case 'setConfig':
         try {
@@ -455,10 +456,10 @@ class ChatPanel {
         break;
       }
       case 'permissionResponse':
-        this.workers.get(this.workerId)?.connection?.answerPermission(message.requestId, message.optionId);
+        this.workers.get(this.workerId)?.connection?.answerPermission(this.key, message.requestId, message.optionId);
         break;
       case 'action':
-        if (message.id === 'signIn') await this.signIn(this.workerId);
+        if (message.id === 'signIn') await this.signIn(this.workerId, agentOfKey(this.key));
         else this.runAction(message.id);
         break;
       case 'removeQueued':
@@ -490,9 +491,10 @@ class ChatPanel {
       case 'subagentSettings':
         try {
           const connection = this.workers.require(this.workerId);
-          const state = await connection.subagentSettings(message.settings);
+          const agent = agentOfKey(this.key);
+          const state = await connection.subagentSettings(agent, message.settings);
           const worker = this.workers.get(this.workerId);
-          if (worker) worker.subagentSettings = state;
+          if (worker) worker.subagentSettings[agent] = state;
           this.post({ type: 'subagentSettings', state });
         } catch (error) {
           this.reportError(error);
@@ -500,7 +502,7 @@ class ChatPanel {
         break;
       case 'restartAgent':
         try {
-          await this.workers.require(this.workerId).restartAgent();
+          await this.workers.require(this.workerId).restartAgent(agentOfKey(this.key));
         } catch (error) {
           this.reportError(error);
         }
@@ -511,6 +513,8 @@ class ChatPanel {
 
 
 const MAX_TAB_TITLE = 32;
+// After an agent's restart, how long its chats wait before they attach to the fresh one.
+const AGENT_RESTART_MS = 500;
 
 /** Titles are often the first prompt; tabs get a short form, the chat header the full one. */
 export function tabTitle(title: string): string {
@@ -539,7 +543,7 @@ export class ChatPanels {
   readonly onDidChangeStatus = this.statusChanged.event;
   private readonly extensionUri: vscode.Uri;
   private readonly workers: WorkerManager;
-  private readonly signIn: (workerId: string) => Promise<void>;
+  private readonly signIn: (workerId: string, agent: AgentName) => Promise<void>;
   /** Shows a file from the worker's sandbox; set once the previews exist. */
   openFile: (workerId: string, key: string, path: string) => void = () => {};
 
@@ -549,7 +553,7 @@ export class ChatPanels {
   constructor(
     extensionUri: vscode.Uri,
     workers: WorkerManager,
-    signIn: (workerId: string) => Promise<void>,
+    signIn: (workerId: string, agent: AgentName) => Promise<void>,
     memento: vscode.Memento
   ) {
     this.extensionUri = extensionUri;
@@ -580,25 +584,23 @@ export class ChatPanels {
     const next = pinned ? [...others, value] : others;
     void this.memento.update(FAVORITE_MODELS_KEY, { ...all, [agent]: next });
     for (const panel of this.panels.values()) {
-      if (this.workers.get(panel.workerId)?.status?.agent === agent) panel.setState({ favoriteModels: next });
+      if (agentOfKey(panel.key) === agent) panel.setState({ favoriteModels: next });
     }
   }
 
-  private modeKey(workerId: string): string | undefined {
-    const agent = this.workers.get(workerId)?.status?.agent;
-    return agent ? `codeflower.mode.${agent}` : undefined;
+  /** Where the mode the user chose last for the chat's agent is kept. */
+  private modeKey(key: string): string {
+    return `codeflower.mode.${agentOfKey(key)}`;
   }
 
   private rememberConfig(workerId: string, key: string, configId: string, value: string | boolean): void {
     const option = this.workers.get(workerId)?.connection?.config(key).find((candidate) => candidate.id === configId);
-    const storageKey = this.modeKey(workerId);
-    if (option?.category === 'mode' && storageKey) void this.memento.update(storageKey, value);
+    if (option?.category === 'mode') void this.memento.update(this.modeKey(key), value);
   }
 
   /** New sessions start in the mode the user chose last for this agent, e.g. one that asks less. */
   private async applyRememberedMode(workerId: string, key: string): Promise<void> {
-    const storageKey = this.modeKey(workerId);
-    const remembered = storageKey ? this.memento.get<string>(storageKey) : undefined;
+    const remembered = this.memento.get<string>(this.modeKey(key));
     const connection = this.workers.get(workerId)?.connection;
     const mode = connection?.config(key).find((option) => option.category === 'mode');
     if (!connection || !remembered || mode?.type !== 'select' || mode.currentValue === remembered) return;
@@ -663,8 +665,21 @@ export class ChatPanels {
     panel?.panel.reveal();
   }
 
+  /** A chat's agent as its header shows it: name, color and logo. */
+  private presentation(workerId: string, key: string): AgentPresentation {
+    const agent = agentOfKey(key);
+    return this.workers.get(workerId)?.connection?.presentation(agent) ?? { id: agent };
+  }
+
+  /** What a chat's header says of its agent, once the worker told its name. */
+  private header(workerId: string, key: string): Pick<ChatState, 'subtitle' | 'agent'> {
+    const agent = this.presentation(workerId, key);
+    return { subtitle: `${agent.name ?? 'Agent'} · ${workerId}`, agent };
+  }
+
   private create(workerId: string, key: string, title: string, subagent?: SubagentSummary): ChatPanel {
     const worker = this.workers.get(workerId);
+    const agent = this.presentation(workerId, key);
     const panel = new ChatPanel({
       extensionUri: this.extensionUri,
       workers: this.workers,
@@ -673,8 +688,8 @@ export class ChatPanels {
       key,
       title,
       actions: worker?.actions,
-      subtitle: `${worker?.status?.agentLabel ?? 'Agent'} · ${workerId}`,
-      agent: agentPresentation(worker?.status?.agent, { name: worker?.status?.agentLabel, ...worker?.status?.agentInfo }),
+      subtitle: `${agent.name ?? 'Agent'} · ${workerId}`,
+      agent,
       onDispose: () => {
         this.panels.delete(this.id(workerId, panel.key));
         this.terminalNotices.delete(panel);
@@ -687,30 +702,29 @@ export class ChatPanels {
       onConfigChosen: (configId, value) => this.rememberConfig(workerId, panel.key, configId, value),
       foldSteps: this.foldSteps,
       onFoldSteps: (fold) => this.setFoldSteps(fold),
-      favoriteModels: this.favoriteModels(worker?.status?.agent),
-      onFavoriteModel: (value, pinned) => this.setFavoriteModel(this.workers.get(workerId)?.status?.agent, value, pinned),
+      favoriteModels: this.favoriteModels(agent.id),
+      onFavoriteModel: (value, pinned) => this.setFavoriteModel(agent.id, value, pinned),
       onOpenSubagent: (target) => void this.open(workerId, target).catch((error) => panel.reportError(error)),
       ...(subagent ? { subagent: this.subagentState(workerId, subagent) } : {})
     });
     this.panels.set(this.id(workerId, key), panel);
     this.showUsage(panel);
-    this.workers.refreshUsage(workerId);
-    panel.post({ type: 'subagentSettings', state: worker?.subagentSettings ?? null });
+    this.workers.refreshUsage(workerId, agent.id);
+    panel.post({ type: 'subagentSettings', state: worker?.subagentSettings[agent.id] ?? null });
     return panel;
   }
 
-  async newSession(workerId: string): Promise<void> {
+  /** A new chat with one of the worker's agents. */
+  async newSession(workerId: string, agent: AgentName): Promise<void> {
     const connection = this.workers.require(workerId);
     let started: AttachedSession;
     try {
-      started = await connection.startSession();
+      started = await connection.startSession(agent);
     } catch (error) {
       if (isAuthRequired(error)) {
-        const choice = await vscode.window.showWarningMessage(
-          'The agent is not signed in for this project.',
-          'Sign in'
-        );
-        if (choice) await this.signIn(workerId);
+        const name = connection.agent(agent)?.name ?? 'The agent';
+        const choice = await vscode.window.showWarningMessage(`${name} is not signed in for this project.`, 'Sign in');
+        if (choice) await this.signIn(workerId, agent);
         return;
       }
       throw error;
@@ -726,7 +740,7 @@ export class ChatPanels {
     }
     await this.applyRememberedMode(workerId, key);
     panel.post({ type: 'config', options: connection.config(key) });
-    panel.setState({ live: true, steer: connection.canSteer });
+    panel.setState({ live: true, steer: connection.canSteer(key) });
     const notice = connection.mcpNotice(key);
     if (notice) panel.notice('info', notice);
     void this.workers.refresh(workerId);
@@ -760,14 +774,14 @@ export class ChatPanels {
     }
     panel.hold();
     try {
-      const attached = await connection.resumeSession(session.nativeSessionId, session.cwd);
+      const attached = await connection.resumeSession(session.harness, session.nativeSessionId, session.cwd);
       // Updates after the attach came live; the transcript has them too.
       panel.loaded(pageUpTo(await connection.transcriptPage(key), attached.transcriptEntries));
       panel.post({ type: 'config', options: connection.config(key) });
       const activity = connection.activity(key);
       panel.post({ type: 'permission', request: activity.permission });
       panel.post({ type: 'question', request: activity.question });
-      panel.setState({ live: true, busy: activity.busy, steer: connection.canSteer });
+      panel.setState({ ...this.header(workerId, key), live: true, busy: activity.busy, steer: connection.canSteer(key) });
       // MCP servers from the app's config the chat is without, e.g. one that did not start.
       const notice = connection.mcpNotice(key);
       if (notice) panel.notice('info', notice);
@@ -800,7 +814,7 @@ export class ChatPanels {
   /** A chat's subagents, for its cards and its badge. */
   private async loadSubagents(panel: ChatPanel): Promise<void> {
     const connection = this.workers.get(panel.workerId)?.connection;
-    if (!connection?.subagentFeatures) return;
+    if (!connection?.subagentFeatures(agentOfKey(panel.key))) return;
     const subagents = await connection.subagents(panel.key).catch(() => undefined);
     if (!subagents) return;
     for (const subagent of subagents) this.knownSubagents(panel.workerId).set(subagent.key, subagent);
@@ -828,10 +842,12 @@ export class ChatPanels {
     this.panels.get(this.id(workerId, subagent.key))?.setState({ subagent: this.subagentState(workerId, subagent) });
   }
 
-  /** The worker's defaults for subagents changed, or it connected. */
-  subagentSettings(workerId: string): void {
-    const state = this.workers.get(workerId)?.subagentSettings ?? null;
-    for (const panel of this.panels.values()) if (panel.workerId === workerId) panel.post({ type: 'subagentSettings', state });
+  /** An agent's defaults for subagents changed, or the worker connected. */
+  subagentSettings(workerId: string, agent: AgentName): void {
+    const state = this.workers.get(workerId)?.subagentSettings[agent] ?? null;
+    for (const panel of this.panels.values()) {
+      if (panel.workerId === workerId && agentOfKey(panel.key) === agent) panel.post({ type: 'subagentSettings', state });
+    }
   }
 
   terminals(workerId: string, terminals: ChatTerminal[]): void {
@@ -855,7 +871,7 @@ export class ChatPanels {
     const id = `${terminal.terminalId}:${terminal.mode}`;
     if (shown === id) return;
     this.terminalNotices.set(panel, id);
-    const agent = this.workers.get(panel.workerId)?.status?.agentLabel ?? 'the agent';
+    const agent = this.presentation(panel.workerId, panel.key).name ?? 'the agent';
     // VS Code knows the worker by its address, which `codeflower attach` does not take: its picker finds the chat.
     const command = ' In a terminal on its computer, `codeflower attach` opens it.';
     panel.notice(
@@ -893,14 +909,14 @@ export class ChatPanels {
     }
   }
 
-  /** The worker's counts changed: each of its chats shows its own and the quota. */
-  usage(workerId: string): void {
-    for (const panel of this.panels.values()) if (panel.workerId === workerId) this.showUsage(panel);
+  /** An agent's counts changed: each of its chats shows its own and the quota. */
+  usage(workerId: string, agent: AgentName): void {
+    for (const panel of this.panels.values()) if (panel.workerId === workerId && agentOfKey(panel.key) === agent) this.showUsage(panel);
   }
 
   private showUsage(panel: ChatPanel): void {
     const worker = this.workers.get(panel.workerId);
-    const usage = worker?.usage;
+    const usage = worker?.usage[agentOfKey(panel.key)];
     let session: ChatUsage['session'] = null;
     const live = usage?.sessions.find((candidate) => candidate.key === panel.key);
     if (live) {
@@ -940,6 +956,27 @@ export class ChatPanels {
 
   close(workerId: string, key: string): void {
     this.panels.get(this.id(workerId, key))?.panel.dispose();
+  }
+
+  /**
+   * An agent's connection ended. After its restart (1011) its open chats attach again, which
+   * starts it; otherwise they say so.
+   */
+  agentDisconnected(workerId: string, agent: AgentName, code: number): void {
+    const panels = [...this.panels.values()].filter((panel) => panel.workerId === workerId && agentOfKey(panel.key) === agent);
+    const restarted = code === 1011;
+    for (const panel of panels) {
+      panel.setState(restarted ? { live: false, busy: false } : { live: false });
+      panel.post({ type: 'config', options: [] });
+    }
+    if (!restarted) {
+      for (const panel of panels) panel.notice('info', 'Disconnected from the agent; it keeps working. Open the chat again to reconnect.');
+      return;
+    }
+    // The worker starts the agent again once the old one is gone.
+    setTimeout(() => {
+      for (const panel of panels) void this.attach(panel).catch((error) => panel.reportError(error));
+    }, AGENT_RESTART_MS);
   }
 
   disconnected(workerId: string, code: number): void {

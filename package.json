@@ -143,6 +143,16 @@
         "title": "Show",
         "category": "code flower",
         "icon": "$(eye)"
+      },
+      {
+        "command": "codeflower.copySandboxPath",
+        "title": "Copy Path (Sandbox)",
+        "category": "code flower"
+      },
+      {
+        "command": "codeflower.copyHostPath",
+        "title": "Copy Path (Host)",
+        "category": "code flower"
       }
     ],
     "menus": {
@@ -181,8 +191,23 @@
         },
         {
           "command": "codeflower.plugins",
-          "when": "view == codeflower.workers && viewItem == worker.connected.plugins",
+          "when": "view == codeflower.workers && viewItem =~ /^worker\\.connected/",
           "group": "worker@2"
+        },
+        {
+          "command": "codeflower.newSession",
+          "when": "view == codeflower.workers && viewItem =~ /^agent\\.ready/",
+          "group": "inline@1"
+        },
+        {
+          "command": "codeflower.plugins",
+          "when": "view == codeflower.workers && viewItem =~ /^agent\\.\\w+\\.plugins$/",
+          "group": "inline@2"
+        },
+        {
+          "command": "codeflower.signIn",
+          "when": "view == codeflower.workers && viewItem =~ /^agent\\.(ready|signIn)/",
+          "group": "inline@3"
         },
         {
           "command": "codeflower.reconnectWorker",
@@ -198,6 +223,16 @@
           "command": "codeflower.deleteSession",
           "when": "view == codeflower.workers && viewItem == session",
           "group": "inline@2"
+        },
+        {
+          "command": "codeflower.copySandboxPath",
+          "when": "view == codeflower.workers && viewItem =~ /^(file|folder)/",
+          "group": "copy@1"
+        },
+        {
+          "command": "codeflower.copyHostPath",
+          "when": "view == codeflower.workers && viewItem =~ /^(file|folder)\\.host$/",
+          "group": "copy@2"
         }
       ],
       "commandPalette": [
@@ -235,6 +270,14 @@
         },
         {
           "command": "codeflower.openFile",
+          "when": "false"
+        },
+        {
+          "command": "codeflower.copySandboxPath",
+          "when": "false"
+        },
+        {
+          "command": "codeflower.copyHostPath",
           "when": "false"
         }
       ]

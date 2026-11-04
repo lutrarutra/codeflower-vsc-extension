@@ -3,7 +3,8 @@
 import type { AuthMethod } from '@agentclientprotocol/sdk';
 import * as vscode from 'vscode';
 import { externalUrl } from 'codeflower-ui/client/links.ts';
-import type { UrlElicitation } from 'codeflower-ui/client/workerConnection.ts';
+import type { AgentName } from 'codeflower-ui/protocol/messages.ts';
+import type { EndpointModel, UrlElicitation, WorkerConnection } from 'codeflower-ui/client/workerConnection.ts';
 import type { WorkerManager } from './workers.ts';
 
 /** A VS Code terminal connected to a sign-in command running in the sandbox. */
@@ -125,18 +126,26 @@ export class SignIn {
 
   // ---- flows ----
 
-  async run(workerId: string): Promise<void> {
-    const worker = this.workers.get(workerId);
+  /** Signs one of the worker's agents in: with its own methods, or the keys code flower keeps for it (dsh). */
+  async run(workerId: string, agent: AgentName): Promise<void> {
     const connection = this.workers.require(workerId);
-    const status = worker?.status ?? (await connection.status());
-    if (status.credentials === 'keys') {
-      await this.setKeys(workerId);
+    const state = connection.agent(agent);
+    const name = state?.name ?? agent;
+    if (state?.unavailable) {
+      void vscode.window.showWarningMessage(`${name} cannot run in this worker: ${state.unavailable}`);
+      return;
+    }
+    if (state?.credentials === 'keys') {
+      await this.setKeys(workerId, agent, name);
       return;
     }
 
-    const methods = connection.authMethods;
+    const methods = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Starting ${name}…` },
+      () => connection.authMethods(agent)
+    );
     if (methods.length === 0) {
-      void vscode.window.showWarningMessage(`${status.agentLabel} offers no sign-in methods to code flower.`);
+      void vscode.window.showWarningMessage(`${name} offers no sign-in methods to code flower.`);
       return;
     }
     const picked = await vscode.window.showQuickPick(
@@ -145,19 +154,19 @@ export class SignIn {
         detail: method.description ?? undefined,
         method
       })),
-      { placeHolder: `Sign in to ${status.agentLabel}`, ignoreFocusOut: true }
+      { placeHolder: `Sign in to ${name}`, ignoreFocusOut: true }
     );
     if (!picked) return;
     const method = picked.method;
 
     if (isTerminalMethod(method)) {
-      this.openTerminal(workerId, method);
+      this.openTerminal(workerId, agent, method);
       return;
     }
     let meta: Record<string, unknown> | undefined;
     if (isApiKeyMethod(method)) {
       const apiKey = await vscode.window.showInputBox({
-        prompt: `${status.agentLabel}: API key`,
+        prompt: `${name}: API key`,
         password: true,
         ignoreFocusOut: true,
         validateInput: (value) => (value.trim() ? undefined : 'The key cannot be empty')
@@ -166,17 +175,17 @@ export class SignIn {
       meta = { 'api-key': { apiKey: apiKey.trim() } };
     }
     await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: `Signing in to ${status.agentLabel}…`, cancellable: false },
-      () => connection.authenticate(method.id, meta)
+      { location: vscode.ProgressLocation.Notification, title: `Signing in to ${name}…`, cancellable: false },
+      () => connection.authenticate(agent, method.id, meta)
     );
     await this.workers.refresh(workerId);
-    void vscode.window.showInformationMessage(`Signed in to ${status.agentLabel}.`);
+    void vscode.window.showInformationMessage(`Signed in to ${name}.`);
   }
 
-  private openTerminal(workerId: string, method: AuthMethod): void {
+  private openTerminal(workerId: string, agent: AgentName, method: AuthMethod): void {
     const connection = this.workers.require(workerId);
     const pty = new SignInTerminal({
-      start: (columns, rows) => connection.startTerminal(method.id, columns, rows),
+      start: (columns, rows) => connection.startTerminal(agent, method.id, columns, rows),
       input: (terminalId, data) => connection.terminalInput(terminalId, data),
       stop: (terminalId) => connection.closeTerminal(terminalId),
       register: (terminalId, terminal) => {
@@ -192,20 +201,20 @@ export class SignIn {
     vscode.window.createTerminal({ name: `code flower sign-in: ${method.name}`, pty }).show();
   }
 
-  private async setKeys(workerId: string): Promise<void> {
+  private async setKeys(workerId: string, agent: AgentName, name: string): Promise<void> {
     const connection = this.workers.require(workerId);
     const choice = await vscode.window.showQuickPick(
       [
         { label: 'DeepSeek API key', id: 'deepseek' as const },
         { label: 'OpenAI-compatible endpoint', detail: 'OpenRouter, vLLM on the cluster, …', id: 'compatible' as const }
       ],
-      { placeHolder: 'Which credentials should DeepSeek Harness use?', ignoreFocusOut: true }
+      { placeHolder: `Which credentials should ${name} use?`, ignoreFocusOut: true }
     );
     if (!choice) return;
     if (choice.id === 'deepseek') {
       const key = await vscode.window.showInputBox({ prompt: 'DeepSeek API key', password: true, ignoreFocusOut: true });
       if (!key?.trim()) return;
-      await connection.setCredentials({ deepseekApiKey: key.trim() });
+      await connection.setCredentials(agent, { deepseekApiKey: key.trim() });
     } else {
       const baseURL = await vscode.window.showInputBox({
         prompt: 'Base URL of the OpenAI-compatible API',
@@ -214,32 +223,70 @@ export class SignIn {
         validateInput: (value) => (/^https?:\/\/\S+$/.test(value.trim()) ? undefined : 'Enter an http(s) URL')
       });
       if (!baseURL) return;
-      const models = await vscode.window.showInputBox({
-        prompt: 'Model ids served by the endpoint, separated by commas',
-        ignoreFocusOut: true,
-        validateInput: (value) => (value.split(',').some((model) => model.trim()) ? undefined : 'Enter at least one model')
-      });
-      if (!models) return;
+      const apiKey = await vscode.window.showInputBox({ prompt: 'API key for the endpoint', password: true, ignoreFocusOut: true });
+      if (!apiKey?.trim()) return;
+      const models = await this.chooseModels(connection, agent, baseURL.trim(), apiKey.trim());
+      if (!models?.length) return;
       const reasoningEfforts = await vscode.window.showInputBox({
         prompt: 'Reasoning effort values accepted by the endpoint, separated by commas (blank disables the picker)',
         value: 'low, medium, high',
         ignoreFocusOut: true
       });
       if (reasoningEfforts === undefined) return;
-      const apiKey = await vscode.window.showInputBox({ prompt: 'API key for the endpoint', password: true, ignoreFocusOut: true });
-      if (!apiKey?.trim()) return;
-      await connection.setCredentials({
+      await connection.setCredentials(agent, {
         openaiCompatible: {
           baseURL: baseURL.trim(),
-          models: models.split(',').map((model) => model.trim()).filter(Boolean),
+          models,
           reasoningEfforts: reasoningEfforts.split(',').map((effort) => effort.trim()).filter(Boolean),
           apiKey: apiKey.trim()
         }
       });
     }
-    // The agent reads its keys at start: restart it, then connect to the fresh one.
-    await connection.restartAgent();
-    await this.workers.reconnect(workerId);
-    void vscode.window.showInformationMessage('DeepSeek Harness credentials saved in the project.');
+    // The agent reads its keys at start: one that runs restarts, and its chats attach to the fresh one.
+    if (connection.agent(agent)?.running) await connection.restartAgent(agent);
+    await this.workers.refresh(workerId);
+    void vscode.window.showInformationMessage(`${name} credentials saved in the project.`);
+  }
+
+  /** The models to use: picked from those the endpoint lists, or typed when it lists none or the sandbox cannot ask. */
+  private async chooseModels(
+    connection: WorkerConnection,
+    agent: AgentName,
+    baseURL: string,
+    apiKey: string
+  ): Promise<(string | EndpointModel)[] | undefined> {
+    let listed: EndpointModel[] = [];
+    try {
+      listed = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Listing the models of ${baseURL}…` },
+        () => connection.endpointModels(agent, baseURL, apiKey)
+      );
+    } catch (error) {
+      void vscode.window.showWarningMessage(`Could not list the models: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (listed.length) {
+      const picked = await vscode.window.showQuickPick(
+        listed.map((model) => ({
+          label: model.id,
+          description: [
+            model.name,
+            model.contextWindow && `${Math.round(model.contextWindow / 1024)}k context`,
+            model.input?.includes('image') && 'image',
+            model.reasoning && 'thinks'
+          ]
+            .filter(Boolean)
+            .join(' · '),
+          model
+        })),
+        { canPickMany: true, matchOnDescription: true, placeHolder: 'Models to use; those that do not think get no reasoning effort', ignoreFocusOut: true }
+      );
+      return picked?.map((item) => item.model);
+    }
+    const typed = await vscode.window.showInputBox({
+      prompt: 'Model ids served by the endpoint, separated by commas',
+      ignoreFocusOut: true,
+      validateInput: (value) => (value.split(',').some((model) => model.trim()) ? undefined : 'Enter at least one model')
+    });
+    return typed?.split(',').map((model) => model.trim()).filter(Boolean);
   }
 }

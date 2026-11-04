@@ -1,7 +1,9 @@
 import * as vscode from 'vscode';
 import { limitIsCurrent, limitIsLow, limitLine, totalsLines, usageSummary, type WorkerUsage } from 'codeflower-ui/protocol/usage.ts';
 import type { SessionStatus } from 'codeflower-ui/protocol/messages.ts';
-import { WORKSPACE, type Mount } from 'codeflower-ui/client/workerConnection.ts';
+import { agentOfKey, WORKSPACE, type AgentState, type Mount } from 'codeflower-ui/client/workerConnection.ts';
+import { agentIcon, agentState } from './agentIcons.ts';
+import { pathContext } from './paths.ts';
 import type { WorkerEntry, WorkerManager } from './workers.ts';
 
 /** The app mounts each of the user's folders in a subfolder of one of these. */
@@ -80,7 +82,9 @@ export interface SessionStatuses {
 export type TreeNode =
   | { kind: 'worker'; workerId: string }
   | { kind: 'session'; workerId: string; key: string }
-  | { kind: 'signIn'; workerId: string }
+  /** The worker's agents, and one of them. */
+  | { kind: 'agents'; workerId: string }
+  | { kind: 'agent'; workerId: string; agent: string }
   | { kind: 'group'; workerId: string; root: string; label: string; icon: string; mounts: Mount[] }
   | { kind: 'folder'; workerId: string; path: string; label: string; icon?: string; source?: string; readOnly?: boolean }
   | { kind: 'file'; workerId: string; path: string; label: string; size: number; mtimeMs: number }
@@ -118,6 +122,9 @@ export class WorkerTree implements vscode.TreeDataProvider<TreeNode> {
       );
     }
     if (node.kind === 'folder') return this.folderChildren(node);
+    if (node.kind === 'agents') {
+      return (this.workers.get(node.workerId)?.agents ?? []).map((agent) => ({ kind: 'agent', workerId: node.workerId, agent: agent.id }));
+    }
     if (node.kind !== 'worker') return [];
     const worker = this.workers.get(node.workerId);
     if (!worker) return [];
@@ -129,7 +136,7 @@ export class WorkerTree implements vscode.TreeDataProvider<TreeNode> {
       return [{ kind: 'message', workerId: worker.id, text }];
     }
     const children: TreeNode[] = [];
-    if (worker.status && !worker.status.signedIn) children.push({ kind: 'signIn', workerId: worker.id });
+    if (worker.agents.length) children.push({ kind: 'agents', workerId: worker.id });
     children.push(...folders(worker.id, worker.status?.mounts));
     for (const session of worker.sessions) children.push({ kind: 'session', workerId: worker.id, key: session.key });
     if (!worker.sessions.length) children.push({ kind: 'message', workerId: worker.id, text: 'No sessions yet' });
@@ -165,28 +172,37 @@ export class WorkerTree implements vscode.TreeDataProvider<TreeNode> {
         const elsewhere = session?.openOn && session.openOn !== worker?.status?.instanceId;
         const status = this.statuses.status(node.workerId, node.key);
         const [icon, color, label] = status ? statusLook[status] : ['comment-discussion', '', ''];
-        item.description = [label, session ? relative(session.updatedAt) : '', elsewhere ? 'open on another worker' : '']
+        const agentId = agentOfKey(node.key);
+        const agent = worker?.agents.find((candidate) => candidate.id === agentId)?.name ?? agentId;
+        item.description = [agent, label, session ? relative(session.updatedAt) : '', elsewhere ? 'open on another worker' : '']
           .filter(Boolean)
           .join(' · ');
         item.iconPath = new vscode.ThemeIcon(icon, color ? new vscode.ThemeColor(color) : undefined);
         // Loaded on the worker: its live counts; otherwise those its turns recorded.
-        const counts = worker?.usage?.sessions.find((candidate) => candidate.key === node.key) ?? session?.usage;
+        const usage = worker?.usage[agentId];
+        const counts = usage?.sessions.find((candidate) => candidate.key === node.key) ?? session?.usage;
         if (session && counts?.tokens.totalTokens) {
-          item.tooltip = [session.title, ...totalsLines(counts, worker?.usage?.costEstimate ?? false)].join('\n');
+          item.tooltip = [session.title, ...totalsLines(counts, usage?.costEstimate ?? false)].join('\n');
         }
         item.contextValue = 'session';
         item.command = { command: 'codeflower.openSession', title: 'Open session', arguments: [node] };
         return item;
       }
-      case 'signIn': {
+      case 'agents': {
+        // Open while an agent has yet to sign in.
+        const waiting = worker?.agents.some((agent) => !agent.signedIn && !agent.unavailable);
         const item = new vscode.TreeItem(
-          `Sign in to ${worker?.status?.agentLabel ?? 'the agent'}…`,
-          vscode.TreeItemCollapsibleState.None
+          'Agents',
+          waiting ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed
         );
-        item.iconPath = new vscode.ThemeIcon('key');
-        item.command = { command: 'codeflower.signIn', title: 'Sign in', arguments: [node] };
+        item.id = `agents:${node.workerId}`;
+        item.iconPath = new vscode.ThemeIcon('hubot');
+        const signedIn = worker?.agents.filter((agent) => agent.signedIn && !agent.unavailable).length ?? 0;
+        item.description = `${signedIn} of ${worker?.agents.length ?? 0} signed in`;
         return item;
       }
+      case 'agent':
+        return this.agentItem(worker, worker?.agents.find((agent) => agent.id === node.agent), node);
       case 'group': {
         const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Expanded);
         item.id = `group:${node.workerId}:${node.root}`;
@@ -204,6 +220,7 @@ export class WorkerTree implements vscode.TreeDataProvider<TreeNode> {
         else if (node.icon) item.description = node.path;
         item.tooltip = node.source ? `${node.path}\nfrom ${node.source}` : node.path;
         item.accessibilityInformation = { label: node.path };
+        item.contextValue = pathContext('folder', worker?.status, node.path);
         return item;
       }
       case 'file': {
@@ -212,7 +229,7 @@ export class WorkerTree implements vscode.TreeDataProvider<TreeNode> {
         item.iconPath = new vscode.ThemeIcon(FILE_ICONS.find(([pattern]) => pattern.test(node.label))?.[1] ?? 'file');
         item.description = `${size(node.size)} · ${relative(new Date(node.mtimeMs).toISOString())}`;
         item.tooltip = node.path;
-        item.contextValue = 'file';
+        item.contextValue = pathContext('file', worker?.status, node.path);
         item.command = { command: 'codeflower.openFile', title: 'Show', arguments: [node] };
         return item;
       }
@@ -224,19 +241,47 @@ export class WorkerTree implements vscode.TreeDataProvider<TreeNode> {
     }
   }
 
+  /** An agent of the worker: its logo, whether it is signed in, its usage, and what can be done with it. */
+  private agentItem(worker: WorkerEntry | undefined, agent: AgentState | undefined, node: TreeNode): vscode.TreeItem {
+    if (!worker || !agent) return new vscode.TreeItem('Unknown agent');
+    const item = new vscode.TreeItem(agent.name, vscode.TreeItemCollapsibleState.None);
+    item.id = `agent:${worker.id}:${agent.id}`;
+    item.iconPath = agentIcon(agent);
+    const usage = worker.usage[agent.id];
+    item.description = [agentState(agent), agent.restartPending ? 'restart to apply' : '', usage ? usageSummary(usage, usage.totals) : '']
+      .filter(Boolean)
+      .join(' · ');
+    item.tooltip = new vscode.MarkdownString(
+      [
+        `**${agent.name}**`,
+        agent.unavailable ?? (agent.signedIn ? signedInText(usage) : 'Not signed in'),
+        usage ? usageTooltip(usage) : ''
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+      true
+    );
+    // `agent.ready` (signed in) or `agent.signIn`, with `.plugins` when it takes plugins: its inline actions.
+    item.contextValue = agent.unavailable
+      ? 'agent.unavailable'
+      : `agent.${agent.signedIn ? 'ready' : 'signIn'}${agent.capabilities.plugins ? '.plugins' : ''}`;
+    if (!agent.unavailable && !agent.signedIn) item.command = { command: 'codeflower.signIn', title: 'Sign in', arguments: [node] };
+    return item;
+  }
+
   private workerItem(worker: WorkerEntry | undefined): vscode.TreeItem {
     if (!worker) return new vscode.TreeItem('Unknown worker');
-    const label = worker.status?.agentLabel ?? 'Worker';
+    // Every agent runs in it: it is known by its project.
+    const label = worker.status?.stateDirectory?.split('/').filter(Boolean).at(-1) ?? 'Worker';
     const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Expanded);
     item.id = `worker:${worker.id}`;
-    const usage = worker.usage;
-    const summary = usage ? usageSummary(usage, usage.totals) : '';
+    const usages = Object.values(worker.usage);
     const end = worker.status?.allocationEnd
       ? `until ${new Date(worker.status.allocationEnd).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
       : '';
     // A line without a fingerprint (an older image, or a worker serving its page): plain WebSocket.
     const unencrypted = !worker.address.fingerprint;
-    item.description = [worker.id, unencrypted ? 'unencrypted' : '', worker.status?.slurmJobId ? `job ${worker.status.slurmJobId}` : '', end, summary]
+    item.description = [worker.id, unencrypted ? 'unencrypted' : '', worker.status?.slurmJobId ? `job ${worker.status.slurmJobId}` : '', end]
       .filter(Boolean)
       .join(' · ');
     item.tooltip = new vscode.MarkdownString(
@@ -246,8 +291,6 @@ export class WorkerTree implements vscode.TreeDataProvider<TreeNode> {
         unencrypted
           ? '$(warning) Unencrypted connection: its line has no certificate fingerprint (fp=), so chats and its token cross the network in the clear. Start it with a current code flower, without --server.'
           : '',
-        worker.status ? (worker.status.signedIn ? signedInText(usage) : 'Not signed in') : '',
-        usage ? usageTooltip(usage) : '',
         worker.error ? `Last error: ${worker.error}` : ''
       ]
         .filter(Boolean)
@@ -255,21 +298,19 @@ export class WorkerTree implements vscode.TreeDataProvider<TreeNode> {
       // For the warning icon on a quota window that is nearly used up.
       true
     );
+    // Green once an agent can answer; a quota window nearly used up turns it orange.
     const color =
       worker.state === 'connected'
-        ? new vscode.ThemeColor(worker.status?.signedIn ? 'testing.iconPassed' : 'editorWarning.foreground')
+        ? new vscode.ThemeColor(worker.agents.some((agent) => agent.signedIn) ? 'testing.iconPassed' : 'editorWarning.foreground')
         : new vscode.ThemeColor('disabledForeground');
-    // A quota window nearly used up turns the worker orange.
-    const low = usage?.auth.kind === 'subscription' && usage.limits.some((limit) => limitIsCurrent(limit) && limitIsLow(limit));
+    const low = usages.some(
+      (usage) => usage.auth.kind === 'subscription' && usage.limits.some((limit) => limitIsCurrent(limit) && limitIsLow(limit))
+    );
     item.iconPath = new vscode.ThemeIcon(
       worker.state === 'connected' ? 'vm-running' : 'vm-outline',
       low && worker.state === 'connected' ? new vscode.ThemeColor('editorWarning.foreground') : color
     );
-    // `worker.connected.plugins`: its agent has plugins (`Plugins…`).
-    item.contextValue =
-      worker.state === 'connected'
-        ? `worker.connected${worker.status?.capabilities?.plugins ? '.plugins' : ''}`
-        : 'worker.disconnected';
+    item.contextValue = worker.state === 'connected' ? 'worker.connected' : 'worker.disconnected';
     return item;
   }
 }

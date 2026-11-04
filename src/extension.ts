@@ -1,13 +1,16 @@
 import * as vscode from 'vscode';
 import { parseWorkerAddress } from 'codeflower-ui/client/address.ts';
+import { hostPath } from 'codeflower-ui/client/hostPaths.ts';
 import { pastedLine } from './pastedLine.ts';
 import { ChatPanels } from './chatPanel.ts';
 import { followDevWorker } from './devWorker.ts';
 import { PluginsPanels } from './pluginsPanel.ts';
 import { PreviewPanels } from './previewPanel.ts';
 import { SignIn } from './signIn.ts';
+import { pickAgent, setIconDirectory } from './agentIcons.ts';
 import { attentionStatusBar } from './statusBar.ts';
 import { WorkerTree, type TreeNode } from './tree.ts';
+import type { AgentState } from 'codeflower-ui/client/workerConnection.ts';
 import { WorkerManager } from './workers.ts';
 
 function message(error: unknown): string {
@@ -32,19 +35,39 @@ export function activate(context: vscode.ExtensionContext): void {
     terminals: (workerId, terminals) => panels?.terminals(workerId, terminals),
     terminalOutput: (terminalId, data) => signIn?.terminalOutput(terminalId, data),
     terminalExit: (terminalId, exitCode) => signIn?.terminalExit(terminalId, exitCode),
-    usage: (workerId) => panels?.usage(workerId),
+    usage: (workerId, agent) => panels?.usage(workerId, agent),
     subagent: (workerId, subagent) => panels?.subagentChanged(workerId, subagent),
-    subagentSettings: (workerId) => panels?.subagentSettings(workerId),
+    subagentSettings: (workerId, agent) => panels?.subagentSettings(workerId, agent),
     connected: async (workerId) => panels?.reconnected(workerId),
-    disconnected: (workerId, code) => panels?.disconnected(workerId, code)
+    disconnected: (workerId, code) => panels?.disconnected(workerId, code),
+    agentDisconnected: (workerId, agent, code) => panels?.agentDisconnected(workerId, agent, code)
   });
+  setIconDirectory(context.globalStorageUri);
   signIn = new SignIn(workers);
-  const runSignIn = async (workerId: string) => {
+  const runSignIn = async (workerId: string, agent: string) => {
     try {
-      await signIn!.run(workerId);
+      await signIn!.run(workerId, agent);
     } catch (error) {
       void vscode.window.showErrorMessage(`Sign-in failed: ${message(error)}`);
     }
+  };
+  /** The agent a tree node names, or the user's pick among the worker's agents. */
+  const agentOf = async (node: TreeNode, title: string, only?: (agent: AgentState) => boolean): Promise<string | undefined> => {
+    if (node.kind === 'agent') return node.agent;
+    const worker = workers.get(node.workerId);
+    const first = context.globalState.get<string>(`codeflower.newChatAgent.${node.workerId}`);
+    return (await pickAgent(worker?.agents ?? [], { title, first, only }))?.id;
+  };
+  /** A new chat with the agent the node names, or the one the user picks (the one used last first). */
+  const newSession = async (node: TreeNode) => {
+    const agent = await agentOf(node, 'New session with');
+    if (!agent) return;
+    void context.globalState.update(`codeflower.newChatAgent.${node.workerId}`, agent);
+    if (workers.get(node.workerId)?.agents.find((candidate) => candidate.id === agent)?.signedIn === false) {
+      await runSignIn(node.workerId, agent);
+      return;
+    }
+    await panels!.newSession(node.workerId, agent);
   };
   panels = new ChatPanels(context.extensionUri, workers, runSignIn, context.globalState);
   previews = new PreviewPanels(context.extensionUri, workers, panels);
@@ -66,12 +89,13 @@ export function activate(context: vscode.ExtensionContext): void {
     const worker = await vscode.window.withProgress({ location: { viewId: 'codeflower.workers' } }, () =>
       workers.add(text)
     );
-    if (worker.status && !worker.status.signedIn) {
-      const choice = await vscode.window.showInformationMessage(
-        `${worker.status.agentLabel} is not signed in for this project yet.`,
-        'Sign in'
-      );
-      if (choice) await runSignIn(worker.id);
+    // Once for every agent not signed in yet; the Agents node signs each in later.
+    const waiting = worker.agents.filter((agent) => !agent.signedIn && !agent.unavailable);
+    if (waiting.length === worker.agents.length && waiting.length) {
+      const choice = await vscode.window.showInformationMessage('No agent is signed in for this project yet.', 'Sign in');
+      if (!choice) return;
+      const agent = await pickAgent(waiting, { title: 'Sign in to' });
+      if (agent) await runSignIn(worker.id, agent.id);
     }
   };
 
@@ -125,6 +149,19 @@ export function activate(context: vscode.ExtensionContext): void {
       )
     ),
     vscode.commands.registerCommand(
+      'codeflower.copySandboxPath',
+      guarded((node: TreeNode) => (node.kind === 'file' || node.kind === 'folder' ? vscode.env.clipboard.writeText(node.path) : undefined))
+    ),
+    vscode.commands.registerCommand(
+      'codeflower.copyHostPath',
+      guarded(async (node: TreeNode) => {
+        if (node.kind !== 'file' && node.kind !== 'folder') return;
+        const path = hostPath(workers.get(node.workerId)?.status, node.path);
+        if (path) await vscode.env.clipboard.writeText(path);
+        else void vscode.window.showInformationMessage(`${node.path} is not in a folder from the machine that runs the sandbox.`);
+      })
+    ),
+    vscode.commands.registerCommand(
       'codeflower.removeWorker',
       guarded((node: TreeNode) => workers.remove(node.workerId))
     ),
@@ -132,12 +169,21 @@ export function activate(context: vscode.ExtensionContext): void {
       'codeflower.reconnectWorker',
       guarded((node: TreeNode) => workers.reconnect(node.workerId))
     ),
-    vscode.commands.registerCommand('codeflower.signIn', guarded((node: TreeNode) => runSignIn(node.workerId))),
-    vscode.commands.registerCommand('codeflower.plugins', guarded((node: TreeNode) => plugins.open(node.workerId))),
     vscode.commands.registerCommand(
-      'codeflower.newSession',
-      guarded((node: TreeNode) => panels!.newSession(node.workerId))
+      'codeflower.signIn',
+      guarded(async (node: TreeNode) => {
+        const agent = await agentOf(node, 'Sign in to');
+        if (agent) await runSignIn(node.workerId, agent);
+      })
     ),
+    vscode.commands.registerCommand(
+      'codeflower.plugins',
+      guarded(async (node: TreeNode) => {
+        const agent = await agentOf(node, 'Plugins of', (candidate) => !!candidate.capabilities.plugins);
+        if (agent) plugins.open(node.workerId, agent);
+      })
+    ),
+    vscode.commands.registerCommand('codeflower.newSession', guarded(newSession)),
     vscode.commands.registerCommand(
       'codeflower.openSession',
       guarded((node: TreeNode) => (node.kind === 'session' ? panels!.open(node.workerId, node.key) : undefined))

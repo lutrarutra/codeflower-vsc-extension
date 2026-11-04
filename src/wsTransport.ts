@@ -51,8 +51,10 @@ export class PinnedAgent extends Agent {
   }
 }
 
-export async function wsTransport(address: WorkerAddress, timeoutMs = 15_000): Promise<Transport> {
-  const socket = new WebSocket(address.url, {
+export async function wsTransport(address: WorkerAddress, agent?: string, timeoutMs = 15_000): Promise<Transport> {
+  // One agent's connection, or without one the worker's own.
+  const url = agent ? `${address.url}?agent=${encodeURIComponent(agent)}` : address.url;
+  const socket = new WebSocket(url, {
     headers: { authorization: `Bearer ${address.token}` },
     handshakeTimeout: timeoutMs,
     maxPayload: 16 * 1024 * 1024,

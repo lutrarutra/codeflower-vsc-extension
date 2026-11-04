@@ -1,12 +1,13 @@
 import type { SessionConfigOption } from '@agentclientprotocol/sdk';
 import * as vscode from 'vscode';
-import type { ChatAction, PendingPermission, PendingQuestion, TranscriptEntry } from 'codeflower-ui/protocol/messages.ts';
+import type { AgentName, ChatAction, PendingPermission, PendingQuestion, TranscriptEntry } from 'codeflower-ui/protocol/messages.ts';
 import type { SubagentSettingsState, SubagentSummary } from 'codeflower-ui/protocol/subagents.ts';
 import type { WorkerUsage } from 'codeflower-ui/protocol/usage.ts';
 import { parseWorkerAddress, type WorkerAddress } from 'codeflower-ui/client/address.ts';
 import {
   TAKEN_OVER,
   WorkerConnection,
+  type AgentState,
   type ChatTerminal,
   type SessionRecord,
   type ShowRequest,
@@ -27,12 +28,14 @@ export interface WorkerEntry {
   state: 'connecting' | 'connected' | 'disconnected';
   connection?: WorkerConnection;
   status?: WorkerStatus;
+  /** Its agents: whether each can run, is signed in, runs. */
+  agents: AgentState[];
   actions?: ChatAction[];
   sessions: SessionRecord[];
-  /** Tokens, cost, and quota; the worker sends changes as they happen. */
-  usage?: WorkerUsage;
-  /** The defaults of its agent's subagents; missing when it has none in code flower. */
-  subagentSettings?: SubagentSettingsState;
+  /** Each agent's tokens, cost, and quota; the worker sends changes as they happen. */
+  usage: Record<AgentName, WorkerUsage>;
+  /** The defaults of each agent's subagents; missing for agents without them in code flower. */
+  subagentSettings: Record<AgentName, SubagentSettingsState>;
   error?: string;
   /** Another window took the worker over (older workers only); it is not reconnected until the user asks. */
   takenOver?: boolean;
@@ -52,14 +55,17 @@ export interface WorkerRouter {
   terminals(workerId: string, terminals: ChatTerminal[]): void;
   terminalOutput(terminalId: string, data: string): void;
   terminalExit(terminalId: string, exitCode: number): void;
-  usage(workerId: string, usage: WorkerUsage): void;
+  /** An agent's usage changed. */
+  usage(workerId: string, agent: AgentName): void;
   /** One of a chat's subagents changed. */
   subagent(workerId: string, subagent: SubagentSummary): void;
-  /** The defaults of the worker's subagents changed. */
-  subagentSettings(workerId: string): void;
-  /** Connected (again): open chats attach to the worker's agent. */
+  /** The defaults of an agent's subagents changed. */
+  subagentSettings(workerId: string, agent: AgentName): void;
+  /** Connected (again): open chats attach to their agents. */
   connected(workerId: string): Promise<void>;
   disconnected(workerId: string, code: number): void;
+  /** An agent's connection ended, e.g. it restarted (1011). */
+  agentDisconnected(workerId: string, agent: AgentName, code: number): void;
 }
 
 function serialize(address: WorkerAddress): string {
@@ -122,7 +128,7 @@ export class WorkerManager implements vscode.Disposable {
     const address = parseWorkerAddress(text);
     const existing = this.workers.get(address.display);
     existing?.connection?.close();
-    const entry: WorkerEntry = { id: address.display, address, state: 'connecting', sessions: [] };
+    const entry: WorkerEntry = { id: address.display, address, state: 'connecting', sessions: [], agents: [], usage: {}, subagentSettings: {} };
     this.workers.set(entry.id, entry);
     this.changed.fire();
     if (persist) await this.save();
@@ -156,6 +162,7 @@ export class WorkerManager implements vscode.Disposable {
     try {
       const [status, sessions] = await Promise.all([entry.connection.status(), entry.connection.listSessions()]);
       entry.status = status;
+      entry.agents = status.agents;
       entry.sessions = sessions;
     } catch (error) {
       entry.error = error instanceof Error ? error.message : String(error);
@@ -182,29 +189,26 @@ export class WorkerManager implements vscode.Disposable {
   }
 
   private warnWrapUp(entry: WorkerEntry, notice: WrapUpNotice): void {
-    void vscode.window.showWarningMessage(wrapUpMessage(entry.status?.agentLabel ?? 'Worker', entry.id, notice));
+    void vscode.window.showWarningMessage(wrapUpMessage('The worker', entry.id, notice));
   }
 
   /**
-   * Asks for the usage again, e.g. when a chat opens or comes to the front:
-   * the worker then reads the login's quota if its last read is old, and
-   * sends it when it has it.
+   * Asks for an agent's usage again, e.g. when a chat of it opens or comes to
+   * the front: the worker then reads the login's quota if its last read is
+   * old, and sends it when it has it.
    */
-  refreshUsage(id: string): void {
+  refreshUsage(id: string, agent: AgentName): void {
     const entry = this.workers.get(id);
     const connection = entry?.connection;
     if (!entry || !connection) return;
-    void connection
-      .usage()
-      .then((usage) => {
-        if (usage && entry.connection === connection) this.setUsage(entry, usage);
-      })
-      .catch(() => undefined);
+    void connection.usage(agent).then((usage) => {
+      if (usage && entry.connection === connection) this.setUsage(entry, agent, usage);
+    });
   }
 
-  private setUsage(entry: WorkerEntry, usage: WorkerUsage): void {
-    entry.usage = usage;
-    this.router.usage(entry.id, usage);
+  private setUsage(entry: WorkerEntry, agent: AgentName, usage: WorkerUsage): void {
+    entry.usage[agent] = usage;
+    this.router.usage(entry.id, agent);
     this.changed.fire();
   }
 
@@ -223,7 +227,7 @@ export class WorkerManager implements vscode.Disposable {
     for (;;) {
       try {
         const connection = await WorkerConnection.connect(
-          await wsTransport(entry.address),
+          (agent) => wsTransport(entry.address, agent),
           {
             entry: (key, item) => this.router.entry(entry.id, key, item),
             permission: (key, request) => this.router.permission(entry.id, key, request),
@@ -236,21 +240,30 @@ export class WorkerManager implements vscode.Disposable {
             terminals: (terminals) => this.router.terminals(entry.id, terminals),
             terminalOutput: (terminalId, data) => this.router.terminalOutput(terminalId, data),
             terminalExit: (terminalId, exitCode) => this.router.terminalExit(terminalId, exitCode),
-            usage: (usage) => {
+            usage: (agent, usage) => {
               if (entry.connection !== connection) return;
-              this.setUsage(entry, usage);
+              this.setUsage(entry, agent, usage);
+            },
+            agents: (agents) => {
+              entry.agents = agents;
+              this.changed.fire();
             },
             wrapUp: (notice) => this.warnWrapUp(entry, notice),
             subagent: (_parentKey, subagent) => this.router.subagent(entry.id, subagent),
-            subagentSettings: (state) => {
+            subagentSettings: (agent, state) => {
               if (entry.connection !== connection) return;
-              entry.subagentSettings = state;
-              this.router.subagentSettings(entry.id);
+              entry.subagentSettings[agent] = state;
+              this.router.subagentSettings(entry.id, agent);
+            },
+            agentClosed: (agent, _reason, code) => {
+              if (entry.connection !== connection) return;
+              delete entry.usage[agent];
+              this.router.agentDisconnected(entry.id, agent, code);
             },
             closed: (reason, code) => {
               if (entry.connection !== connection) return;
               entry.connection = undefined;
-              entry.usage = undefined;
+              entry.usage = {};
               entry.state = 'disconnected';
               entry.error = reason;
               entry.takenOver = code === TAKEN_OVER;
@@ -269,14 +282,21 @@ export class WorkerManager implements vscode.Disposable {
         }
         entry.connection = connection;
         entry.actions = actions;
+        entry.agents = connection.agents;
         entry.state = 'connected';
         entry.takenOver = false;
         await this.refresh(entry.id);
-        // Later changes come as notifications.
-        const usage = await connection.usage().catch(() => undefined);
-        if (usage && entry.connection === connection) this.setUsage(entry, usage);
-        entry.subagentSettings = connection.subagentFeatures ? await connection.subagentSettings().catch(() => undefined) : undefined;
-        this.router.subagentSettings(entry.id);
+        // Every agent's usage and subagent defaults; asking starts no agent. Later changes come as notifications.
+        for (const agent of connection.agents) {
+          const usage = await connection.usage(agent.id);
+          if (usage && entry.connection === connection) this.setUsage(entry, agent.id, usage);
+          if (!agent.capabilities.subagents) continue;
+          const settings = await connection.subagentSettings(agent.id).catch(() => undefined);
+          if (settings && entry.connection === connection) {
+            entry.subagentSettings[agent.id] = settings;
+            this.router.subagentSettings(entry.id, agent.id);
+          }
+        }
         await this.router.connected(entry.id);
         return;
       } catch (error) {
