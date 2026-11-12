@@ -1,8 +1,16 @@
 import type { SessionConfigOption } from '@agentclientprotocol/sdk';
 import * as vscode from 'vscode';
-import type { AgentName, ChatAction, PendingPermission, PendingQuestion, TranscriptEntry } from 'codeflower-ui/protocol/messages.ts';
+import type {
+  AgentName,
+  BackgroundTask,
+  ChatAction,
+  PendingPermission,
+  PendingQuestion,
+  TranscriptEntry
+} from 'codeflower-ui/protocol/messages.ts';
 import type { SubagentSettingsState, SubagentSummary } from 'codeflower-ui/protocol/subagents.ts';
 import type { WorkerUsage } from 'codeflower-ui/protocol/usage.ts';
+import type { AgentCommand } from 'codeflower-ui/protocol/commands.ts';
 import { parseWorkerAddress, type WorkerAddress } from 'codeflower-ui/client/address.ts';
 import {
   TAKEN_OVER,
@@ -47,13 +55,18 @@ export interface WorkerRouter {
   permission(workerId: string, sessionKey: string, request: PendingPermission | null): void;
   question(workerId: string, sessionKey: string, request: PendingQuestion | null): void;
   busy(workerId: string, sessionKey: string, busy: boolean): void;
+  /** The agent's work that runs on after its turns (e.g. background commands) started or ended. */
+  background(workerId: string, sessionKey: string, tasks: BackgroundTask[]): void;
+  /** The commands a chat's agent runs changed: one started or ended, or a window watches it. */
+  commands(workerId: string, sessionKey: string, commands: AgentCommand[]): void;
   config(workerId: string, sessionKey: string, options: SessionConfigOption[]): void;
   elicitUrl(workerId: string, request: UrlElicitation): Promise<'accept' | 'decline'>;
   elicitationComplete(workerId: string, elicitationId: string): void;
   show(workerId: string, request: ShowRequest): void;
   /** The chats open in the agent's own terminal UI (`codeflower attach`): on connect, and when that changes. */
   terminals(workerId: string, terminals: ChatTerminal[]): void;
-  terminalOutput(terminalId: string, data: string): void;
+  /** `replayed`: what the terminal printed before this window attached to it. */
+  terminalOutput(terminalId: string, data: string, replayed?: boolean): void;
   terminalExit(terminalId: string, exitCode: number): void;
   /** An agent's usage changed. */
   usage(workerId: string, agent: AgentName): void;
@@ -233,12 +246,14 @@ export class WorkerManager implements vscode.Disposable {
             permission: (key, request) => this.router.permission(entry.id, key, request),
             question: (key, request) => this.router.question(entry.id, key, request),
             busy: (key, busy) => this.router.busy(entry.id, key, busy),
+            background: (key, tasks) => this.router.background(entry.id, key, tasks),
+            commands: (key, commands) => this.router.commands(entry.id, key, commands),
             config: (key, options) => this.router.config(entry.id, key, options),
             elicitUrl: (request) => this.router.elicitUrl(entry.id, request),
             elicitationComplete: (elicitationId) => this.router.elicitationComplete(entry.id, elicitationId),
             show: (request) => this.router.show(entry.id, request),
             terminals: (terminals) => this.router.terminals(entry.id, terminals),
-            terminalOutput: (terminalId, data) => this.router.terminalOutput(terminalId, data),
+            terminalOutput: (terminalId, data, replayed) => this.router.terminalOutput(terminalId, data, replayed),
             terminalExit: (terminalId, exitCode) => this.router.terminalExit(terminalId, exitCode),
             usage: (agent, usage) => {
               if (entry.connection !== connection) return;

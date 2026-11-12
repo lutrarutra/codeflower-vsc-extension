@@ -5,6 +5,7 @@ import {
   type ActionPromptMeta,
   type AgentName,
   type AgentPresentation,
+  type BackgroundTask,
   type ChatAction,
   type ChatState,
   type HostMessage,
@@ -16,6 +17,7 @@ import {
 } from 'codeflower-ui/protocol/messages.ts';
 import { PromptQueue } from 'codeflower-ui/client/promptQueue.ts';
 import type { ChatUsage } from 'codeflower-ui/protocol/usage.ts';
+import type { AgentCommand } from 'codeflower-ui/protocol/commands.ts';
 import {
   subagentTitle,
   withSubagent,
@@ -67,6 +69,7 @@ class ChatPanel {
   subagents: SubagentSummary[] = [];
   private subagentSettings: SubagentSettingsState | null = null;
   private readonly openSubagent: (key: string) => void;
+  private readonly openCommand: (command: AgentCommand) => void;
   private readonly extensionUri: vscode.Uri;
   private status: SessionStatus | undefined;
   private readonly onStatus: () => void;
@@ -106,6 +109,8 @@ class ChatPanel {
     onFavoriteModel: (value: string, pinned: boolean) => void;
     /** Shows a subagent's chat, or this subagent chat's parent. */
     onOpenSubagent: (key: string) => void;
+    /** Shows a command the chat's agent runs, read-only. */
+    onOpenCommand: (command: AgentCommand) => void;
     subagent?: ChatState['subagent'];
   }) {
     this.workers = options.workers;
@@ -125,6 +130,7 @@ class ChatPanel {
       ...(options.subagent ? { subagent: options.subagent } : {})
     };
     this.openSubagent = options.onOpenSubagent;
+    this.openCommand = options.onOpenCommand;
     if (this.state.autoApprove !== undefined) {
       this.workers.get(this.workerId)?.connection?.setAutoApprove(this.key, this.state.autoApprove);
     }
@@ -481,6 +487,11 @@ class ChatPanel {
       case 'openParent':
         if (this.state.subagent) this.openSubagent(this.state.subagent.parentKey);
         break;
+      case 'openCommand': {
+        const command = this.state.commands?.find((candidate) => candidate.commandId === message.commandId);
+        if (command) this.openCommand(command);
+        break;
+      }
       case 'stopSubagent':
         try {
           await this.workers.require(this.workerId).cancelSubagent(message.key);
@@ -546,6 +557,8 @@ export class ChatPanels {
   private readonly signIn: (workerId: string, agent: AgentName) => Promise<void>;
   /** Shows a file from the worker's sandbox; set once the previews exist. */
   openFile: (workerId: string, key: string, path: string) => void = () => {};
+  /** Shows a command an agent runs, read-only; set once the terminals exist. */
+  openCommand: (workerId: string, command: AgentCommand, agentName: string) => void = () => {};
 
   /** Remembers the user's last mode per agent for new sessions, and whether chats fold their steps. */
   private readonly memento: vscode.Memento;
@@ -705,6 +718,7 @@ export class ChatPanels {
       favoriteModels: this.favoriteModels(agent.id),
       onFavoriteModel: (value, pinned) => this.setFavoriteModel(agent.id, value, pinned),
       onOpenSubagent: (target) => void this.open(workerId, target).catch((error) => panel.reportError(error)),
+      onOpenCommand: (command) => this.openCommand(workerId, command, agent.name ?? agentOfKey(panel.key)),
       ...(subagent ? { subagent: this.subagentState(workerId, subagent) } : {})
     });
     this.panels.set(this.id(workerId, key), panel);
@@ -781,12 +795,19 @@ export class ChatPanels {
       const activity = connection.activity(key);
       panel.post({ type: 'permission', request: activity.permission });
       panel.post({ type: 'question', request: activity.question });
-      panel.setState({ ...this.header(workerId, key), live: true, busy: activity.busy, steer: connection.canSteer(key) });
+      panel.setState({
+        ...this.header(workerId, key),
+        live: true,
+        busy: activity.busy,
+        background: activity.background,
+        steer: connection.canSteer(key)
+      });
       // MCP servers from the app's config the chat is without, e.g. one that did not start.
       const notice = connection.mcpNotice(key);
       if (notice) panel.notice('info', notice);
       this.noticeTerminal(panel);
       void this.loadSubagents(panel);
+      void this.loadCommands(panel);
     } catch (error) {
       panel.loaded(await connection.transcriptPage(key).catch(() => EMPTY_TRANSCRIPT));
       panel.reportError(error);
@@ -950,6 +971,22 @@ export class ChatPanels {
     this.panels.get(this.id(workerId, key))?.setState({ busy });
   }
 
+  background(workerId: string, key: string, background: BackgroundTask[]): void {
+    this.panels.get(this.id(workerId, key))?.setState({ background });
+  }
+
+  commands(workerId: string, key: string, commands: AgentCommand[]): void {
+    this.panels.get(this.id(workerId, key))?.setState({ commands });
+  }
+
+  /** The commands a chat's agent runs, for its strip. */
+  private async loadCommands(panel: ChatPanel): Promise<void> {
+    const connection = this.workers.get(panel.workerId)?.connection;
+    if (!connection?.commandsFeature(agentOfKey(panel.key))) return;
+    const commands = await connection.commands(panel.key).catch(() => undefined);
+    if (commands) panel.setState({ commands });
+  }
+
   rename(workerId: string, key: string, title: string): void {
     this.panels.get(this.id(workerId, key))?.setState({ title });
   }
@@ -966,7 +1003,7 @@ export class ChatPanels {
     const panels = [...this.panels.values()].filter((panel) => panel.workerId === workerId && agentOfKey(panel.key) === agent);
     const restarted = code === 1011;
     for (const panel of panels) {
-      panel.setState(restarted ? { live: false, busy: false } : { live: false });
+      panel.setState(restarted ? { live: false, busy: false, background: [] } : { live: false });
       panel.post({ type: 'config', options: [] });
     }
     if (!restarted) {
@@ -984,7 +1021,7 @@ export class ChatPanels {
     const agentEnded = code === 1011;
     for (const panel of this.panels.values()) {
       if (panel.workerId !== workerId) continue;
-      panel.setState(agentEnded ? { live: false, busy: false } : { live: false });
+      panel.setState(agentEnded ? { live: false, busy: false, background: [] } : { live: false });
       panel.post({ type: 'config', options: [] });
       panel.notice(
         'info',

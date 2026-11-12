@@ -7,6 +7,7 @@ import { followDevWorker } from './devWorker.ts';
 import { PluginsPanels } from './pluginsPanel.ts';
 import { PreviewPanels } from './previewPanel.ts';
 import { SignIn } from './signIn.ts';
+import { CommandTerminals } from './commandTerminals.ts';
 import { pickAgent, setIconDirectory } from './agentIcons.ts';
 import { attentionStatusBar } from './statusBar.ts';
 import { WorkerTree, type TreeNode } from './tree.ts';
@@ -23,18 +24,24 @@ export function activate(context: vscode.ExtensionContext): void {
   let panels: ChatPanels | undefined;
   let previews: PreviewPanels | undefined;
   let signIn: SignIn | undefined;
+  let commandTerminals: CommandTerminals | undefined;
   const workers = new WorkerManager(context, {
     entry: (workerId, key, entry) => panels?.entry(workerId, key, entry),
     permission: (workerId, key, request) => panels?.permission(workerId, key, request),
     question: (workerId, key, request) => panels?.question(workerId, key, request),
     busy: (workerId, key, busy) => panels?.busy(workerId, key, busy),
+    background: (workerId, key, tasks) => panels?.background(workerId, key, tasks),
+    commands: (workerId, key, commands) => panels?.commands(workerId, key, commands),
     config: (workerId, key, options) => panels?.config(workerId, key, options),
     elicitUrl: async (_workerId, request) => (signIn ? signIn.elicitUrl(request) : 'decline'),
     elicitationComplete: () => {},
     show: (workerId, request) => previews?.show(workerId, request),
     terminals: (workerId, terminals) => panels?.terminals(workerId, terminals),
-    terminalOutput: (terminalId, data) => signIn?.terminalOutput(terminalId, data),
-    terminalExit: (terminalId, exitCode) => signIn?.terminalExit(terminalId, exitCode),
+    // A command watched here, else a sign-in.
+    terminalOutput: (terminalId, data, replayed) =>
+      commandTerminals?.has(terminalId) ? commandTerminals.output(terminalId, data, replayed === true) : signIn?.terminalOutput(terminalId, data),
+    terminalExit: (terminalId, exitCode) =>
+      commandTerminals?.has(terminalId) ? commandTerminals.exit(terminalId, exitCode) : signIn?.terminalExit(terminalId, exitCode),
     usage: (workerId, agent) => panels?.usage(workerId, agent),
     subagent: (workerId, subagent) => panels?.subagentChanged(workerId, subagent),
     subagentSettings: (workerId, agent) => panels?.subagentSettings(workerId, agent),
@@ -44,6 +51,7 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   setIconDirectory(context.globalStorageUri);
   signIn = new SignIn(workers);
+  commandTerminals = new CommandTerminals(workers);
   const runSignIn = async (workerId: string, agent: string) => {
     try {
       await signIn!.run(workerId, agent);
@@ -72,6 +80,7 @@ export function activate(context: vscode.ExtensionContext): void {
   panels = new ChatPanels(context.extensionUri, workers, runSignIn, context.globalState);
   previews = new PreviewPanels(context.extensionUri, workers, panels);
   panels.openFile = (workerId, key, path) => void previews!.openPath(workerId, path, key);
+  panels.openCommand = (workerId, command, agentName) => commandTerminals!.show(workerId, command, agentName);
   const tree = new WorkerTree(workers, panels);
   const plugins = new PluginsPanels(context.extensionUri, workers);
 
