@@ -20,6 +20,7 @@ import {
   type SessionRecord,
   type ShowRequest,
   type UrlElicitation,
+  type WorkerQueue,
   type WorkerStatus,
   type WrapUpNotice
 } from 'codeflower-ui/client/workerConnection.ts';
@@ -55,6 +56,8 @@ export interface WorkerRouter {
   permission(workerId: string, sessionKey: string, request: PendingPermission | null): void;
   question(workerId: string, sessionKey: string, request: PendingQuestion | null): void;
   busy(workerId: string, sessionKey: string, busy: boolean): void;
+  /** A chat's prompts queued on the worker: when it opens here, and when they change from any window. */
+  queue(workerId: string, sessionKey: string, queue: WorkerQueue): void;
   /** The agent's work that runs on after its turns (e.g. background commands) started or ended. */
   background(workerId: string, sessionKey: string, tasks: BackgroundTask[]): void;
   /** The commands a chat's agent runs changed: one started or ended, or a window watches it. */
@@ -246,6 +249,7 @@ export class WorkerManager implements vscode.Disposable {
             permission: (key, request) => this.router.permission(entry.id, key, request),
             question: (key, request) => this.router.question(entry.id, key, request),
             busy: (key, busy) => this.router.busy(entry.id, key, busy),
+            queue: (key, queue) => this.router.queue(entry.id, key, queue),
             background: (key, tasks) => this.router.background(entry.id, key, tasks),
             commands: (key, commands) => this.router.commands(entry.id, key, commands),
             config: (key, options) => this.router.config(entry.id, key, options),

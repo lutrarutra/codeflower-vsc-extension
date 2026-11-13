@@ -15,7 +15,7 @@ import {
   type TranscriptEntry,
   type WebviewMessage
 } from 'codeflower-ui/protocol/messages.ts';
-import { PromptQueue } from 'codeflower-ui/client/promptQueue.ts';
+import { ChatQueue } from 'codeflower-ui/client/chatQueue.ts';
 import type { ChatUsage } from 'codeflower-ui/protocol/usage.ts';
 import type { AgentCommand } from 'codeflower-ui/protocol/commands.ts';
 import {
@@ -34,7 +34,8 @@ import {
   pageUpTo,
   RpcError,
   TAKEN_OVER,
-  type TranscriptPage
+  type TranscriptPage,
+  type WorkerQueue
 } from 'codeflower-ui/client/workerConnection.ts';
 import { webviewHtml } from './webviewHtml.ts';
 import type { WorkerManager } from './workers.ts';
@@ -81,9 +82,16 @@ class ChatPanel {
   lastUsed = Date.now();
   /** The user's `!commands` running now; files they show belong to this chat. */
   shellsRunning = 0;
-  /** Messages sent from elsewhere (e.g. a preview's feedback) while the agent was busy. */
-  private readonly waiting = new PromptQueue();
-  private sending = false;
+  /** The prompts that wait for the turn to end: on the worker, or here (chatQueue.ts). */
+  private readonly prompts = new ChatQueue({
+    state: () => this.state,
+    prompt: (text, action) => this.sendPrompt(text, action),
+    steer: async (text) => (await this.workers.get(this.workerId)?.connection?.steer(this.key, text).catch(() => false)) ?? false,
+    cancel: () => this.workers.get(this.workerId)?.connection?.cancel(this.key),
+    worker: () => this.workers.get(this.workerId)?.connection?.workerQueue(this.key),
+    post: (message) => this.post(message),
+    error: (message) => this.notice('error', message)
+  });
   /** Live entries that arrive while the transcript loads; they follow it. */
   private held: TranscriptEntry[] | undefined;
 
@@ -173,17 +181,10 @@ class ChatPanel {
 
   /** Sends a message to the agent as if typed here; it waits while the agent works. */
   send(text: string): 'sent' | 'queued' {
-    if (this.state.busy || this.sending) {
-      this.waiting.enqueue(text, 'Preview feedback');
-      this.publishQueue();
-      return 'queued';
-    }
-    void this.sendPrompt(text);
-    return 'sent';
+    return this.prompts.send(text);
   }
 
   private async sendPrompt(text: string, action?: ActionPromptMeta): Promise<void> {
-    this.sending = true;
     this.lastUsed = Date.now();
     try {
       await this.workers.require(this.workerId).prompt(this.key, text, action);
@@ -192,50 +193,12 @@ class ChatPanel {
       if (!isConnectionClosed(error)) this.reportError(error);
     } finally {
       void this.workers.refresh(this.workerId);
-      this.sending = false;
-      this.flushWaiting();
     }
   }
 
-  /** A message from the composer: while the agent works it waits for the turn to end, unless sent `now`. */
-  private message(text: string, now: boolean): void {
-    if (!this.state.busy && !this.sending) void this.sendPrompt(text);
-    else if (now) void this.sendNow(this.waiting.enqueueMessage(text).id);
-    else {
-      this.waiting.enqueueMessage(text);
-      this.publishQueue();
-    }
-  }
-
-  /**
-   * A queued prompt, now: into the turn where the agent takes messages while it
-   * works, otherwise first in the queue, and the turn stops so it goes next.
-   */
-  private async sendNow(id: string): Promise<void> {
-    const item = this.waiting.take(id);
-    if (!item) return;
-    // A command or an action is a prompt of its own.
-    if (this.state.steer && item.editable && !item.text.trimStart().startsWith('/')) {
-      this.publishQueue();
-      const connection = this.workers.get(this.workerId)?.connection;
-      // A message the turn could not take is sent another way; no notice for it.
-      if (connection && (await connection.steer(this.key, item.text).catch(() => false))) return;
-    }
-    this.waiting.putFirst(item);
-    this.publishQueue();
-    if (this.state.busy || this.sending) this.workers.get(this.workerId)?.connection?.cancel(this.key);
-    else this.flushWaiting();
-  }
-
-  private publishQueue(): void {
-    this.post({ type: 'queue', items: this.waiting.summaries() });
-  }
-
-  private flushWaiting(): void {
-    if (this.state.busy || !this.state.live || this.sending) return;
-    const next = this.waiting.take();
-    this.publishQueue();
-    if (next) void this.sendPrompt(next.text, next.action);
+  /** The chat's prompts queued on the worker changed, or the chat opened here. */
+  queueChanged(queue: WorkerQueue): void {
+    this.prompts.workerChanged(queue);
   }
 
   private runAction(id: string): void {
@@ -248,19 +211,7 @@ class ChatPanel {
       this.notice('error', 'This action is unavailable on this worker. Reconnect to an updated sandbox.');
       return;
     }
-    const meta = { id: action.id, title: action.title };
-    if (this.state.busy || this.sending) {
-      if (action.mode === 'interrupt') {
-        this.waiting.replace(action.prompt, action.title, meta);
-        this.publishQueue();
-        this.workers.get(this.workerId)?.connection?.cancel(this.key);
-      } else {
-        this.waiting.enqueue(action.prompt, action.title, meta);
-        this.publishQueue();
-      }
-      return;
-    }
-    void this.sendPrompt(action.prompt, meta);
+    this.prompts.action(action);
   }
 
   /** Holds live entries until `loaded` shows the transcript they follow. */
@@ -332,7 +283,7 @@ class ChatPanel {
     this.panel.title = tabTitle(this.state.title);
     this.showStatus();
     this.post({ type: 'state', state: this.state });
-    this.flushWaiting();
+    this.prompts.flush();
   }
 
   get sessionStatus(): SessionStatus {
@@ -383,7 +334,7 @@ class ChatPanel {
         void this.panel.webview.postMessage({ type: 'question', request: this.question } satisfies HostMessage);
         void this.panel.webview.postMessage({ type: 'config', options: this.config } satisfies HostMessage);
         void this.panel.webview.postMessage({ type: 'usage', usage: this.usage } satisfies HostMessage);
-        void this.panel.webview.postMessage({ type: 'queue', items: this.waiting.summaries() } satisfies HostMessage);
+        void this.panel.webview.postMessage(this.prompts.message() satisfies HostMessage);
         void this.panel.webview.postMessage({ type: 'subagents', subagents: this.subagents } satisfies HostMessage);
         void this.panel.webview.postMessage({ type: 'subagentSettings', state: this.subagentSettings } satisfies HostMessage);
         for (const queued of this.queue.splice(0)) {
@@ -394,7 +345,7 @@ class ChatPanel {
         await this.loadEarlier();
         break;
       case 'prompt':
-        this.message(message.text, message.now ?? false);
+        this.prompts.compose(message.text, message.now ?? false);
         break;
       case 'openFile':
         this.onOpenFile(message.path);
@@ -451,16 +402,10 @@ class ChatPanel {
       case 'favoriteModel':
         this.onFavoriteModel(message.value, message.favorite);
         break;
-      case 'cancel': {
+      case 'cancel':
         // The user's queued messages go back to the composer instead of after the stop.
-        const messages = this.waiting.takeMessages();
-        if (messages.length) {
-          this.publishQueue();
-          this.post({ type: 'draft', text: messages.map((item) => item.text).join('\n\n') });
-        }
-        this.workers.get(this.workerId)?.connection?.cancel(this.key);
+        await this.prompts.stop();
         break;
-      }
       case 'permissionResponse':
         this.workers.get(this.workerId)?.connection?.answerPermission(this.key, message.requestId, message.optionId);
         break;
@@ -469,18 +414,17 @@ class ChatPanel {
         else this.runAction(message.id);
         break;
       case 'removeQueued':
-        if (this.waiting.remove(message.id)) this.publishQueue();
+        this.prompts.remove(message.id);
         break;
       case 'sendQueued':
-        void this.sendNow(message.id);
+        void this.prompts.sendNow(message.id);
         break;
-      case 'editQueued': {
-        const item = this.waiting.take(message.id);
-        if (!item) break;
-        this.publishQueue();
-        this.post({ type: 'draft', text: item.text });
+      case 'editQueued':
+        await this.prompts.edit(message.id);
         break;
-      }
+      case 'resumeQueue':
+        this.prompts.resume();
+        break;
       case 'openSubagent':
         this.openSubagent(message.key);
         break;
@@ -969,6 +913,10 @@ export class ChatPanels {
 
   busy(workerId: string, key: string, busy: boolean): void {
     this.panels.get(this.id(workerId, key))?.setState({ busy });
+  }
+
+  queue(workerId: string, key: string, queue: WorkerQueue): void {
+    this.panels.get(this.id(workerId, key))?.queueChanged(queue);
   }
 
   background(workerId: string, key: string, background: BackgroundTask[]): void {

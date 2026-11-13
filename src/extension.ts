@@ -30,6 +30,7 @@ export function activate(context: vscode.ExtensionContext): void {
     permission: (workerId, key, request) => panels?.permission(workerId, key, request),
     question: (workerId, key, request) => panels?.question(workerId, key, request),
     busy: (workerId, key, busy) => panels?.busy(workerId, key, busy),
+    queue: (workerId, key, queue) => panels?.queue(workerId, key, queue),
     background: (workerId, key, tasks) => panels?.background(workerId, key, tasks),
     commands: (workerId, key, commands) => panels?.commands(workerId, key, commands),
     config: (workerId, key, options) => panels?.config(workerId, key, options),
