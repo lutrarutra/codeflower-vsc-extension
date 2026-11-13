@@ -292,7 +292,7 @@
   },
   "dependencies": {
     "codeflower-ui": "github:lutrarutra/codeflower-ui#v0.26.0",
-    "ws": "^8.18.3"
+    "ws": "^8.22.2"
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "2.1.0",
