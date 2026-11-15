@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
-import { REPORT_CSP, interactiveHtml } from '../src/reportHtml.ts';
+import { REPORT_CSP, interactiveHtml, printableHtml } from '../src/reportHtml.ts';
 
 test('the policy and the bridge come first in the head, before the report scripts', () => {
   const html = interactiveHtml('<!doctype html><html><head><meta charset="utf-8"><script>report()</script></head><body></body></html>');
@@ -32,4 +32,21 @@ test('the bridge passes the comments on, and nothing too large', () => {
   window.cfHost!.saveComments({ not: 'text' });
   // Made in the script's own context: compare as JSON.
   assert.equal(JSON.stringify(posted), JSON.stringify([{ type: 'comments', json: '[]' }]));
+});
+
+test('the bridge asks the extension to print, as the webview may not', () => {
+  const script = /<script>([\s\S]*?)<\/script>/.exec(interactiveHtml('<head></head>'))![1]!;
+  const posted: unknown[] = [];
+  const window: { cfHost?: { print(): void } } = {};
+  runInNewContext(script, { window, acquireVsCodeApi: () => ({ postMessage: (message: unknown) => posted.push(message) }) });
+  window.cfHost!.print();
+  assert.equal(JSON.stringify(posted), JSON.stringify([{ type: 'print' }]));
+});
+
+test('a printable copy has the policy, no bridge, and prints itself once loaded', () => {
+  const html = printableHtml('<html><head></head><body><p>report</p></body></html>');
+  assert.match(html, /<head><meta http-equiv="Content-Security-Policy"/);
+  assert.doesNotMatch(html, /acquireVsCodeApi|cfHost/);
+  assert.ok(html.indexOf('report') < html.indexOf('print()'));
+  assert.ok(html.indexOf('print()') < html.indexOf('</body>'));
 });

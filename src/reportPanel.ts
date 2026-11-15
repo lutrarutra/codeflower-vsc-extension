@@ -1,17 +1,20 @@
 // An HTML report with its scripts running: interactive charts and explorers, which
 // the sanitised preview strips. The page runs in its own webview with no network
 // (no connect-src, no remote sources) and no local files (no resource roots); all
-// it can do is tell this host three things:
+// it can do is tell this host four things:
 // - "send": settings from a report control, or the user's comments for the agent, which
 //   go to the preview's feedback box for the user to read and send (never straight
 //   into the chat);
 // - "comments": the comments the user left on the report (JSON), to save into it;
-// - "reload": the page could not apply an update in place and wants a fresh load.
+// - "reload": the page could not apply an update in place and wants a fresh load;
+// - "print": the user pressed Print, which a webview may not do: a copy opens in the
+//   user's browser and prints itself there (printCopy.ts).
 import { createHash } from 'node:crypto';
 import * as vscode from 'vscode';
+import { servePrintCopy, type PrintCopy } from './printCopy.ts';
 import { interactiveHtml } from './reportHtml.ts';
 
-type ReportMessage = { type: 'send'; text: string } | { type: 'comments'; json: string } | { type: 'reload' };
+type ReportMessage = { type: 'send'; text: string } | { type: 'comments'; json: string } | { type: 'reload' } | { type: 'print' };
 
 export interface ReportHost {
   /** Text for the feedback box. */
@@ -32,6 +35,9 @@ export class InteractiveReport {
   private html = '';
   private digest = '';
   private readonly host: ReportHost;
+  private readonly title: string;
+  /** The last copy served for printing, dropped at the next print or when the tab closes. */
+  private printCopy: PrintCopy | undefined;
 
   constructor(
     title: string,
@@ -42,6 +48,7 @@ export class InteractiveReport {
     preserveFocus = false
   ) {
     this.host = host;
+    this.title = title;
     this.panel = vscode.window.createWebviewPanel(
       'codeflower.report',
       `${title} (interactive)`,
@@ -53,8 +60,25 @@ export class InteractiveReport {
       if (message?.type === 'send' && typeof message.text === 'string') this.host.send(message.text);
       else if (message?.type === 'comments' && typeof message.json === 'string') this.host.saveComments(message.json);
       else if (message?.type === 'reload') this.load();
+      else if (message?.type === 'print') void this.print();
     });
-    this.panel.onDidDispose(onClose);
+    this.panel.onDidDispose(() => {
+      this.printCopy?.close();
+      onClose();
+    });
+  }
+
+  /** Opens the report in the user's browser, which prints it. */
+  private async print(): Promise<void> {
+    try {
+      this.printCopy?.close();
+      this.printCopy = await servePrintCopy(this.html);
+      const uri = await vscode.env.asExternalUri(vscode.Uri.parse(this.printCopy.url, true));
+      if (!(await vscode.env.openExternal(uri))) throw new Error('no browser opened it');
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      void vscode.window.showErrorMessage(`Could not open ${this.title} in your browser to print it: ${reason}`);
+    }
   }
 
   /** Shows a new version: patched into the open page when possible, else loaded afresh. */
