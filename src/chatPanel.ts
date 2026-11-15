@@ -71,6 +71,8 @@ class ChatPanel {
   private subagentSettings: SubagentSettingsState | null = null;
   private readonly openSubagent: (key: string) => void;
   private readonly openCommand: (command: AgentCommand) => void;
+  private readonly openShell: () => void;
+  private readonly openBrowser: () => void;
   private readonly extensionUri: vscode.Uri;
   private status: SessionStatus | undefined;
   private readonly onStatus: () => void;
@@ -119,6 +121,12 @@ class ChatPanel {
     onOpenSubagent: (key: string) => void;
     /** Shows a command the chat's agent runs, read-only. */
     onOpenCommand: (command: AgentCommand) => void;
+    /** Opens a shell in the chat's sandbox, in VS Code's terminal panel. */
+    onOpenShell: () => void;
+    /** Shows the chat's browser beside it. */
+    onOpenBrowser: () => void;
+    /** The chat's browser, if it runs (its header's button). */
+    browser?: ChatState['browser'];
     subagent?: ChatState['subagent'];
   }) {
     this.workers = options.workers;
@@ -135,10 +143,13 @@ class ChatPanel {
       busy: false,
       foldSteps: options.foldSteps,
       favoriteModels: options.favoriteModels,
+      ...(options.browser ? { browser: options.browser } : {}),
       ...(options.subagent ? { subagent: options.subagent } : {})
     };
     this.openSubagent = options.onOpenSubagent;
     this.openCommand = options.onOpenCommand;
+    this.openShell = options.onOpenShell;
+    this.openBrowser = options.onOpenBrowser;
     if (this.state.autoApprove !== undefined) {
       this.workers.get(this.workerId)?.connection?.setAutoApprove(this.key, this.state.autoApprove);
     }
@@ -164,6 +175,11 @@ class ChatPanel {
       // The quota may have changed since, e.g. in another chat or window.
       this.workers.refreshUsage(this.workerId, agentOfKey(this.key));
     });
+  }
+
+  /** Where the chat's tab is; a panel beside it goes next to it. */
+  get column(): vscode.ViewColumn | undefined {
+    return this.panel.viewColumn;
   }
 
   get title(): string {
@@ -431,6 +447,12 @@ class ChatPanel {
       case 'openParent':
         if (this.state.subagent) this.openSubagent(this.state.subagent.parentKey);
         break;
+      case 'openShell':
+        this.openShell();
+        break;
+      case 'openBrowser':
+        this.openBrowser();
+        break;
       case 'openCommand': {
         const command = this.state.commands?.find((candidate) => candidate.commandId === message.commandId);
         if (command) this.openCommand(command);
@@ -503,6 +525,12 @@ export class ChatPanels {
   openFile: (workerId: string, key: string, path: string) => void = () => {};
   /** Shows a command an agent runs, read-only; set once the terminals exist. */
   openCommand: (workerId: string, command: AgentCommand, agentName: string) => void = () => {};
+  /** Opens a shell in a worker's sandbox; set once the terminals exist. */
+  openShell: (workerId: string, sandboxName: string) => void = () => {};
+  /** Shows a chat's browser; set once the browser panels exist. */
+  openBrowser: (workerId: string, key: string) => void = () => {};
+  /** What a chat's header shows of its browser; set once the browser panels exist. */
+  browserOf: (workerId: string, key: string) => ChatState['browser'] = () => undefined;
 
   /** Remembers the user's last mode per agent for new sessions, and whether chats fold their steps. */
   private readonly memento: vscode.Memento;
@@ -588,6 +616,16 @@ export class ChatPanels {
     return panel ? { title: panel.title, busy: panel.busy } : null;
   }
 
+  /** The column a chat's tab is in, if it is open. */
+  column(workerId: string, key: string): vscode.ViewColumn | undefined {
+    return this.panels.get(this.id(workerId, key))?.column;
+  }
+
+  /** The chat's browser changed: its header shows it. */
+  browser(workerId: string, key: string, browser: ChatState['browser']): void {
+    this.panels.get(this.id(workerId, key))?.setState({ browser });
+  }
+
   /** Sends text to a session's agent through its chat tab, which opens if needed. */
   async send(workerId: string, key: string, text: string): Promise<'sent' | 'queued'> {
     if (!this.panels.has(this.id(workerId, key))) await this.open(workerId, key);
@@ -663,6 +701,9 @@ export class ChatPanels {
       onFavoriteModel: (value, pinned) => this.setFavoriteModel(agent.id, value, pinned),
       onOpenSubagent: (target) => void this.open(workerId, target).catch((error) => panel.reportError(error)),
       onOpenCommand: (command) => this.openCommand(workerId, command, agent.name ?? agentOfKey(panel.key)),
+      onOpenShell: () => this.openShell(workerId, workerId),
+      onOpenBrowser: () => this.openBrowser(workerId, panel.key),
+      browser: this.browserOf(workerId, key),
       ...(subagent ? { subagent: this.subagentState(workerId, subagent) } : {})
     });
     this.panels.set(this.id(workerId, key), panel);
@@ -698,7 +739,7 @@ export class ChatPanels {
     }
     await this.applyRememberedMode(workerId, key);
     panel.post({ type: 'config', options: connection.config(key) });
-    panel.setState({ live: true, steer: connection.canSteer(key) });
+    panel.setState({ live: true, steer: connection.canSteer(key), shells: connection.shellTerminals });
     const notice = connection.mcpNotice(key);
     if (notice) panel.notice('info', notice);
     void this.workers.refresh(workerId);
@@ -744,7 +785,8 @@ export class ChatPanels {
         live: true,
         busy: activity.busy,
         background: activity.background,
-        steer: connection.canSteer(key)
+        steer: connection.canSteer(key),
+        shells: connection.shellTerminals
       });
       // MCP servers from the app's config the chat is without, e.g. one that did not start.
       const notice = connection.mcpNotice(key);

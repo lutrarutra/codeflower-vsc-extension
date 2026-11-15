@@ -1,9 +1,9 @@
 // The HTML of code flower's webviews: one bundle, which renders the view named
-// on <body>: a chat, a file preview, or an agent's plugins.
+// on <body>: a chat, a file preview, an agent's plugins, or a chat's browser.
 import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
 
-export function webviewHtml(webview: vscode.Webview, assets: vscode.Uri, view: 'chat' | 'preview' | 'plugins'): string {
+export function webviewHtml(webview: vscode.Webview, assets: vscode.Uri, view: 'chat' | 'preview' | 'plugins' | 'browser'): string {
   const nonce = randomBytes(16).toString('base64');
   const script = webview.asWebviewUri(vscode.Uri.joinPath(assets, 'main.js'));
   const style = webview.asWebviewUri(vscode.Uri.joinPath(assets, 'main.css'));

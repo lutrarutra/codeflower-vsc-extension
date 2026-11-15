@@ -6,8 +6,10 @@ import { ChatPanels } from './chatPanel.ts';
 import { followDevWorker } from './devWorker.ts';
 import { PluginsPanels } from './pluginsPanel.ts';
 import { PreviewPanels } from './previewPanel.ts';
+import { BrowserPanels, chatBrowser } from './browserPanel.ts';
 import { SignIn } from './signIn.ts';
 import { CommandTerminals } from './commandTerminals.ts';
+import { ShellTerminals } from './shellTerminals.ts';
 import { pickAgent, setIconDirectory } from './agentIcons.ts';
 import { attentionStatusBar } from './statusBar.ts';
 import { WorkerTree, type TreeNode } from './tree.ts';
@@ -25,6 +27,8 @@ export function activate(context: vscode.ExtensionContext): void {
   let previews: PreviewPanels | undefined;
   let signIn: SignIn | undefined;
   let commandTerminals: CommandTerminals | undefined;
+  let shellTerminals: ShellTerminals | undefined;
+  let browsers: BrowserPanels | undefined;
   const workers = new WorkerManager(context, {
     entry: (workerId, key, entry) => panels?.entry(workerId, key, entry),
     permission: (workerId, key, request) => panels?.permission(workerId, key, request),
@@ -38,21 +42,38 @@ export function activate(context: vscode.ExtensionContext): void {
     elicitationComplete: () => {},
     show: (workerId, request) => previews?.show(workerId, request),
     terminals: (workerId, terminals) => panels?.terminals(workerId, terminals),
-    // A command watched here, else a sign-in.
+    // A command watched here, a shell of the user's, else a sign-in.
     terminalOutput: (terminalId, data, replayed) =>
-      commandTerminals?.has(terminalId) ? commandTerminals.output(terminalId, data, replayed === true) : signIn?.terminalOutput(terminalId, data),
+      commandTerminals?.has(terminalId)
+        ? commandTerminals.output(terminalId, data, replayed === true)
+        : shellTerminals?.has(terminalId)
+          ? shellTerminals.output(terminalId, data, replayed === true)
+          : signIn?.terminalOutput(terminalId, data),
     terminalExit: (terminalId, exitCode) =>
-      commandTerminals?.has(terminalId) ? commandTerminals.exit(terminalId, exitCode) : signIn?.terminalExit(terminalId, exitCode),
+      commandTerminals?.has(terminalId)
+        ? commandTerminals.exit(terminalId, exitCode)
+        : shellTerminals?.has(terminalId)
+          ? shellTerminals.exit(terminalId, exitCode)
+          : signIn?.terminalExit(terminalId, exitCode),
     usage: (workerId, agent) => panels?.usage(workerId, agent),
     subagent: (workerId, subagent) => panels?.subagentChanged(workerId, subagent),
     subagentSettings: (workerId, agent) => panels?.subagentSettings(workerId, agent),
-    connected: async (workerId) => panels?.reconnected(workerId),
-    disconnected: (workerId, code) => panels?.disconnected(workerId, code),
+    browser: (workerId, browser) => browsers?.changed(workerId, browser),
+    browserFrame: (workerId, frame) => browsers?.frame(workerId, frame),
+    connected: async (workerId) => {
+      await panels?.reconnected(workerId);
+      await browsers?.connected(workerId);
+    },
+    disconnected: (workerId, code) => {
+      panels?.disconnected(workerId, code);
+      browsers?.disconnected(workerId);
+    },
     agentDisconnected: (workerId, agent, code) => panels?.agentDisconnected(workerId, agent, code)
   });
   setIconDirectory(context.globalStorageUri);
   signIn = new SignIn(workers);
   commandTerminals = new CommandTerminals(workers);
+  shellTerminals = new ShellTerminals(workers);
   const runSignIn = async (workerId: string, agent: string) => {
     try {
       await signIn!.run(workerId, agent);
@@ -82,6 +103,14 @@ export function activate(context: vscode.ExtensionContext): void {
   previews = new PreviewPanels(context.extensionUri, workers, panels);
   panels.openFile = (workerId, key, path) => void previews!.openPath(workerId, path, key);
   panels.openCommand = (workerId, command, agentName) => commandTerminals!.show(workerId, command, agentName);
+  panels.openShell = (workerId, sandboxName) => shellTerminals!.show(workerId, sandboxName);
+  browsers = new BrowserPanels(context.extensionUri, workers);
+  panels.openBrowser = (workerId, key) => browsers!.open(workerId, key, false);
+  panels.browserOf = (workerId, key) => chatBrowser(browsers!.state(workerId, key));
+  browsers.chatChanged = (workerId, key, browser) => panels!.browser(workerId, key, browser);
+  browsers.chatTitle = (workerId, key) =>
+    panels!.chat(workerId, key)?.title ?? workers.get(workerId)?.sessions.find((session) => session.key === key)?.title;
+  browsers.chatColumn = (workerId, key) => panels!.column(workerId, key);
   const tree = new WorkerTree(workers, panels);
   const plugins = new PluginsPanels(context.extensionUri, workers);
 

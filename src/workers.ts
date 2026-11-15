@@ -11,6 +11,7 @@ import type {
 import type { SubagentSettingsState, SubagentSummary } from 'codeflower-ui/protocol/subagents.ts';
 import type { WorkerUsage } from 'codeflower-ui/protocol/usage.ts';
 import type { AgentCommand } from 'codeflower-ui/protocol/commands.ts';
+import type { BrowserFrame, BrowserState } from 'codeflower-ui/protocol/browser.ts';
 import { parseWorkerAddress, type WorkerAddress } from 'codeflower-ui/client/address.ts';
 import {
   TAKEN_OVER,
@@ -77,6 +78,10 @@ export interface WorkerRouter {
   subagent(workerId: string, subagent: SubagentSummary): void;
   /** The defaults of an agent's subagents changed. */
   subagentSettings(workerId: string, agent: AgentName): void;
+  /** A chat's browser changed (codeflower-browser): started or stopped, its page, who controls it, a handoff. */
+  browser(workerId: string, browser: BrowserState): void;
+  /** A frame of a chat's browser this window watches. */
+  browserFrame(workerId: string, frame: BrowserFrame): void;
   /** Connected (again): open chats attach to their agents. */
   connected(workerId: string): Promise<void>;
   disconnected(workerId: string, code: number): void;
@@ -269,6 +274,8 @@ export class WorkerManager implements vscode.Disposable {
             },
             wrapUp: (notice) => this.warnWrapUp(entry, notice),
             subagent: (_parentKey, subagent) => this.router.subagent(entry.id, subagent),
+            browser: (browser) => this.router.browser(entry.id, browser),
+            browserFrame: (frame) => this.router.browserFrame(entry.id, frame),
             subagentSettings: (agent, state) => {
               if (entry.connection !== connection) return;
               entry.subagentSettings[agent] = state;
