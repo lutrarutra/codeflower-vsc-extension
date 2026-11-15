@@ -15,6 +15,7 @@ import { attentionStatusBar } from './statusBar.ts';
 import { WorkerTree, type TreeNode } from './tree.ts';
 import type { AgentState } from 'codeflower-ui/client/workerConnection.ts';
 import { WorkerManager } from './workers.ts';
+import { TabRestorer } from './restore.ts';
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -114,6 +115,23 @@ export function activate(context: vscode.ExtensionContext): void {
   const tree = new WorkerTree(workers, panels);
   const plugins = new PluginsPanels(context.extensionUri, workers);
 
+  // The workers of the last session, and in development the dev worker: restored tabs wait for them.
+  const restored: Promise<unknown>[] = [workers.restore()];
+  // Set by the "Extension + dev worker" launch configuration.
+  const devState = process.env.CODEFLOWER_DEV_STATE;
+  if (context.extensionMode === vscode.ExtensionMode.Development && devState) {
+    const dev = followDevWorker(devState, workers);
+    context.subscriptions.push(dev.watcher);
+    restored.push(dev.ready);
+  }
+  // Tabs VS Code brings back after a reload or restart (package.json's onWebviewPanel events).
+  const tabs = new TabRestorer(context.extensionUri, workers, Promise.allSettled(restored));
+  tabs.register('codeflower.chat', 'chat', (panel, tab) => panels!.restore(panel, tab));
+  tabs.register('codeflower.preview', 'preview', (panel, tab) => previews!.restore(panel, tab));
+  tabs.register('codeflower.report', 'report', (panel, tab) => previews!.restoreReport(panel, tab));
+  tabs.register('codeflower.browser', 'browser', (panel, tab) => browsers!.restore(panel, tab));
+  tabs.register('codeflower.plugins', 'plugins', (panel, tab) => plugins.restore(panel, tab));
+
   const guarded =
     <T extends unknown[]>(action: (...args: T) => Promise<unknown> | unknown) =>
     async (...args: T) => {
@@ -159,6 +177,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     workers,
     plugins,
+    tabs,
     attentionStatusBar(panels),
     vscode.window.createTreeView('codeflower.workers', { treeDataProvider: tree, showCollapseAll: true }),
     vscode.commands.registerCommand(
@@ -255,14 +274,6 @@ export function activate(context: vscode.ExtensionContext): void {
       })
     )
   );
-
-  void workers.restore();
-
-  // Set by the "Extension + dev worker" launch configuration.
-  const devState = process.env.CODEFLOWER_DEV_STATE;
-  if (context.extensionMode === vscode.ExtensionMode.Development && devState) {
-    context.subscriptions.push(followDevWorker(devState, workers));
-  }
 }
 
 export function deactivate(): void {}

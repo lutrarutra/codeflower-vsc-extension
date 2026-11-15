@@ -13,6 +13,22 @@ import { createHash } from 'node:crypto';
 import * as vscode from 'vscode';
 import { servePrintCopy, type PrintCopy } from './printCopy.ts';
 import { interactiveHtml } from './reportHtml.ts';
+import type { TabState } from './tabState.ts';
+
+export type ReportTab = Extract<TabState, { view: 'report' }>;
+
+/** The page runs scripts but may load nothing: no network, no local files. */
+const REPORT_OPTIONS: vscode.WebviewOptions = { enableScripts: true, localResourceRoots: [] };
+
+/** A new tab for an interactive report. */
+export function createReportPanel(title: string, column: vscode.ViewColumn, preserveFocus: boolean): vscode.WebviewPanel {
+  return vscode.window.createWebviewPanel(
+    'codeflower.report',
+    `${title} (interactive)`,
+    { viewColumn: column, preserveFocus },
+    { ...REPORT_OPTIONS, retainContextWhenHidden: true, enableFindWidget: true }
+  );
+}
 
 type ReportMessage = { type: 'send'; text: string } | { type: 'comments'; json: string } | { type: 'reload' } | { type: 'print' };
 
@@ -34,27 +50,23 @@ export class InteractiveReport {
   readonly panel: vscode.WebviewPanel;
   private html = '';
   private digest = '';
-  private readonly host: ReportHost;
+  private host: ReportHost;
+  private onClose: () => void;
   private readonly title: string;
+  /** What VS Code keeps of the tab to restore it, written into the page at each load. */
+  private tab: ReportTab;
   /** The last copy served for printing, dropped at the next print or when the tab closes. */
   private printCopy: PrintCopy | undefined;
 
-  constructor(
-    title: string,
-    iconPath: vscode.Uri,
-    column: vscode.ViewColumn,
-    host: ReportHost,
-    onClose: () => void,
-    preserveFocus = false
-  ) {
+  /** `panel`: a new tab (createReportPanel), or one VS Code restored. */
+  constructor(panel: vscode.WebviewPanel, tab: ReportTab, iconPath: vscode.Uri, host: ReportHost, onClose: () => void) {
     this.host = host;
-    this.title = title;
-    this.panel = vscode.window.createWebviewPanel(
-      'codeflower.report',
-      `${title} (interactive)`,
-      { viewColumn: column, preserveFocus },
-      { enableScripts: true, localResourceRoots: [], retainContextWhenHidden: true, enableFindWidget: true }
-    );
+    this.onClose = onClose;
+    this.title = tab.title;
+    this.tab = tab;
+    this.panel = panel;
+    this.panel.title = `${tab.title} (interactive)`;
+    this.panel.webview.options = REPORT_OPTIONS;
     this.panel.iconPath = iconPath;
     this.panel.webview.onDidReceiveMessage((message: ReportMessage) => {
       if (message?.type === 'send' && typeof message.text === 'string') this.host.send(message.text);
@@ -64,8 +76,19 @@ export class InteractiveReport {
     });
     this.panel.onDidDispose(() => {
       this.printCopy?.close();
-      onClose();
+      this.onClose();
     });
+  }
+
+  /** Another owner takes the tab over: a preview opened after the report was restored on its own. */
+  attach(host: ReportHost, onClose: () => void): void {
+    this.host = host;
+    this.onClose = onClose;
+  }
+
+  /** What the tab is changed, e.g. the chat its feedback goes to; kept from the next load on. */
+  setTab(tab: ReportTab): void {
+    this.tab = tab;
   }
 
   /** Opens the report in the user's browser, which prints it. */
@@ -96,7 +119,7 @@ export class InteractiveReport {
   }
 
   private load(): void {
-    this.panel.webview.html = interactiveHtml(this.html);
+    this.panel.webview.html = interactiveHtml(this.html, this.tab);
   }
 
   reveal(preserveFocus = false): void {

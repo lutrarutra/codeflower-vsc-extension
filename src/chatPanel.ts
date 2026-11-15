@@ -37,7 +37,8 @@ import {
   type TranscriptPage,
   type WorkerQueue
 } from 'codeflower-ui/client/workerConnection.ts';
-import { webviewHtml } from './webviewHtml.ts';
+import type { TabState } from './tabState.ts';
+import { createTabPanel, postTabState, webviewHtml } from './webviewHtml.ts';
 import type { WorkerManager } from './workers.ts';
 
 const LEASE_CONFLICT = -32010;
@@ -98,6 +99,8 @@ class ChatPanel {
   private held: TranscriptEntry[] | undefined;
 
   constructor(options: {
+    /** Its tab: a new one, or one VS Code restored. */
+    panel: vscode.WebviewPanel;
     extensionUri: vscode.Uri;
     workers: WorkerManager;
     signIn: (workerId: string, agent: AgentName) => Promise<void>;
@@ -153,12 +156,8 @@ class ChatPanel {
     if (this.state.autoApprove !== undefined) {
       this.workers.get(this.workerId)?.connection?.setAutoApprove(this.key, this.state.autoApprove);
     }
-    const assets = vscode.Uri.joinPath(options.extensionUri, 'webview', 'dist');
-    this.panel = vscode.window.createWebviewPanel('codeflower.chat', tabTitle(options.title), vscode.ViewColumn.Active, {
-      enableScripts: true,
-      retainContextWhenHidden: true,
-      localResourceRoots: [assets]
-    });
+    this.panel = options.panel;
+    this.panel.title = tabTitle(options.title);
     this.extensionUri = options.extensionUri;
     this.onStatus = options.onStatus;
     this.onOpenFile = options.onOpenFile;
@@ -166,7 +165,7 @@ class ChatPanel {
     this.onFoldSteps = options.onFoldSteps;
     this.onFavoriteModel = options.onFavoriteModel;
     this.showStatus();
-    this.panel.webview.html = webviewHtml(this.panel.webview, assets, 'chat');
+    this.panel.webview.html = webviewHtml(this.panel.webview, this.extensionUri, 'chat', this.tab);
     this.panel.webview.onDidReceiveMessage((message: WebviewMessage) => void this.handle(message));
     this.panel.onDidDispose(options.onDispose);
     this.panel.onDidChangeViewState(() => {
@@ -175,6 +174,17 @@ class ChatPanel {
       // The quota may have changed since, e.g. in another chat or window.
       this.workers.refreshUsage(this.workerId, agentOfKey(this.key));
     });
+  }
+
+  /** What VS Code keeps of the tab to restore it after a reload. */
+  private get tab(): TabState {
+    return {
+      view: 'chat',
+      workerId: this.workerId,
+      key: this.key,
+      title: this.state.title,
+      ...(this.state.subagent ? { subagent: this.state.subagent } : {})
+    };
   }
 
   /** Where the chat's tab is; a panel beside it goes next to it. */
@@ -290,7 +300,11 @@ class ChatPanel {
   }
 
   setState(update: Partial<ChatState>): void {
+    const before = this.state;
     this.state = { ...this.state, ...update };
+    if (this.ready && (this.state.title !== before.title || this.state.subagent !== before.subagent)) {
+      postTabState(this.panel.webview, this.tab);
+    }
     if (this.state.agent?.id === 'dsh') this.state.autoApprove ??= true;
     else this.state.autoApprove = undefined;
     if (this.state.autoApprove !== undefined) {
@@ -339,6 +353,8 @@ class ChatPanel {
     switch (message.type) {
       case 'ready':
         this.ready = true;
+        // What changed before the page listened.
+        postTabState(this.panel.webview, this.tab);
         void this.panel.webview.postMessage({ type: 'state', state: this.state } satisfies HostMessage);
         void this.panel.webview.postMessage({
           type: 'transcript',
@@ -672,10 +688,17 @@ export class ChatPanels {
     return { subtitle: `${agent.name ?? 'Agent'} · ${workerId}`, agent };
   }
 
-  private create(workerId: string, key: string, title: string, subagent?: SubagentSummary): ChatPanel {
+  private create(
+    workerId: string,
+    key: string,
+    title: string,
+    subagent?: SubagentSummary,
+    tab = createTabPanel(this.extensionUri, 'codeflower.chat', tabTitle(title), vscode.ViewColumn.Active)
+  ): ChatPanel {
     const worker = this.workers.get(workerId);
     const agent = this.presentation(workerId, key);
     const panel = new ChatPanel({
+      panel: tab,
       extensionUri: this.extensionUri,
       workers: this.workers,
       signIn: this.signIn,
@@ -756,6 +779,22 @@ export class ChatPanels {
     const subagent = session ? undefined : this.subagentsByWorker.get(workerId)?.get(key);
     const panel = this.create(workerId, key, session?.title ?? (subagent ? subagentTitle(subagent) : 'Session'), subagent);
     await this.attach(panel);
+  }
+
+  /** A chat tab VS Code restored after a reload; its worker is connected. */
+  async restore(tab: vscode.WebviewPanel, state: Extract<TabState, { view: 'chat' }>): Promise<void> {
+    const { workerId, key } = state;
+    this.workers.require(workerId);
+    // Open twice, e.g. a restored tab of a chat opened again before it showed: one tab stays.
+    if (this.panels.has(this.id(workerId, key))) {
+      tab.dispose();
+      this.panels.get(this.id(workerId, key))?.panel.reveal();
+      return;
+    }
+    const session = this.workers.get(workerId)?.sessions.find((candidate) => candidate.key === key);
+    const subagent = session ? undefined : (this.subagentsByWorker.get(workerId)?.get(key) ?? state.subagent);
+    const title = session?.title ?? (subagent ? subagentTitle(subagent) : state.title);
+    await this.attach(this.create(workerId, key, title, subagent, tab));
   }
 
   /**

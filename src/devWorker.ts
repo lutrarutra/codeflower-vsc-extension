@@ -34,7 +34,8 @@ async function newestInstance(directory: string): Promise<Instance | undefined> 
     .sort((a, b) => b.started_at.localeCompare(a.started_at))[0];
 }
 
-export function followDevWorker(state: string, workers: WorkerManager): vscode.Disposable {
+/** `ready`: the worker running now, if any, was added (whether or not it connected). */
+export function followDevWorker(state: string, workers: WorkerManager): { watcher: vscode.Disposable; ready: Promise<void> } {
   const directory = join(state, 'instances');
   let connected: string | undefined;
   let pending = Promise.resolve();
@@ -53,5 +54,5 @@ export function followDevWorker(state: string, workers: WorkerManager): vscode.D
   watcher.onDidCreate(sync);
   watcher.onDidChange(sync);
   sync();
-  return watcher;
+  return { watcher, ready: pending };
 }

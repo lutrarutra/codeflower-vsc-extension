@@ -37,7 +37,12 @@
     "workspace"
   ],
   "activationEvents": [
-    "onUri"
+    "onUri",
+    "onWebviewPanel:codeflower.chat",
+    "onWebviewPanel:codeflower.preview",
+    "onWebviewPanel:codeflower.report",
+    "onWebviewPanel:codeflower.browser",
+    "onWebviewPanel:codeflower.plugins"
   ],
   "contributes": {
     "configuration": {

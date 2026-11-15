@@ -3,7 +3,9 @@
 import * as vscode from 'vscode';
 import { servePlugins } from 'codeflower-ui/client/pluginsService.ts';
 import type { PluginsWebviewMessage } from 'codeflower-ui/protocol/plugins.ts';
-import { webviewHtml } from './webviewHtml.ts';
+import { TabGone } from './restore.ts';
+import type { TabState } from './tabState.ts';
+import { createTabPanel, webviewHtml } from './webviewHtml.ts';
 import type { WorkerManager } from './workers.ts';
 
 export class PluginsPanels implements vscode.Disposable {
@@ -23,19 +25,39 @@ export class PluginsPanels implements vscode.Disposable {
       existing.reveal();
       return;
     }
-    const worker = this.workers.get(workerId);
-    const state = worker?.agents.find((candidate) => candidate.id === agent);
+    const label = this.agentLabel(workerId, agent);
+    this.show(createTabPanel(this.extensionUri, 'codeflower.plugins', `${label} plugins`, vscode.ViewColumn.Active), workerId, agent, label);
+  }
+
+  /** A plugins tab VS Code restored after a reload; its worker is connected. */
+  async restore(panel: vscode.WebviewPanel, state: Extract<TabState, { view: 'plugins' }>): Promise<void> {
+    if (this.panels.has(`${state.workerId}|${state.agent}`)) {
+      panel.dispose();
+      return;
+    }
+    let label: string;
+    try {
+      label = this.agentLabel(state.workerId, state.agent);
+    } catch (error) {
+      throw new TabGone('No plugins here', error instanceof Error ? error.message : String(error));
+    }
+    this.show(panel, state.workerId, state.agent, label);
+  }
+
+  /** The agent's name, if it has plugins in code flower. */
+  private agentLabel(workerId: string, agent: string): string {
+    const state = this.workers.get(workerId)?.agents.find((candidate) => candidate.id === agent);
     if (!state?.capabilities.plugins) throw new Error(`${state?.name ?? agent} has no plugins in code flower`);
-    const status = worker?.status;
-    const agentLabel = state.name;
-    const assets = vscode.Uri.joinPath(this.extensionUri, 'webview', 'dist');
-    const panel = vscode.window.createWebviewPanel('codeflower.plugins', `${agentLabel} plugins`, vscode.ViewColumn.Active, {
-      enableScripts: true,
-      retainContextWhenHidden: true,
-      localResourceRoots: [assets]
-    });
+    return state.name;
+  }
+
+  private show(panel: vscode.WebviewPanel, workerId: string, agent: string, agentLabel: string): void {
+    const id = `${workerId}|${agent}`;
+    const status = this.workers.get(workerId)?.status;
+    const tab: TabState = { view: 'plugins', workerId, agent };
+    panel.title = `${agentLabel} plugins`;
     panel.iconPath = new vscode.ThemeIcon('extensions');
-    panel.webview.html = webviewHtml(panel.webview, assets, 'plugins');
+    panel.webview.html = webviewHtml(panel.webview, this.extensionUri, 'plugins', tab);
     const where = status?.stateDirectory ? `--state ${status.stateDirectory}` : '--project PROJECT';
     const service = servePlugins({
       connection: () => this.workers.get(workerId)?.connection,

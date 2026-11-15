@@ -5,7 +5,8 @@
 import * as vscode from 'vscode';
 import type { BrowserCall, BrowserFrame, BrowserPanelHostMessage, BrowserPanelMessage, BrowserState } from 'codeflower-ui/protocol/browser.ts';
 import type { ChatState } from 'codeflower-ui/protocol/messages.ts';
-import { webviewHtml } from './webviewHtml.ts';
+import type { TabState } from './tabState.ts';
+import { createTabPanel, webviewHtml } from './webviewHtml.ts';
 import type { WorkerManager } from './workers.ts';
 
 const CALLS = new Set<BrowserCall>(['watch', 'unwatch', 'ack', 'control', 'input', 'navigate', 'dialog', 'selectTab', 'handBack']);
@@ -26,19 +27,15 @@ class BrowserPanel {
   readonly key: string;
   private ready = false;
 
-  constructor(owner: BrowserPanels, workerId: string, key: string, column: vscode.ViewColumn, preserveFocus: boolean) {
+  /** `panel`: a new tab, or one VS Code restored. */
+  constructor(owner: BrowserPanels, workerId: string, key: string, panel: vscode.WebviewPanel) {
     this.owner = owner;
     this.workerId = workerId;
     this.key = key;
-    const assets = vscode.Uri.joinPath(owner.extensionUri, 'webview', 'dist');
-    this.panel = vscode.window.createWebviewPanel(
-      'codeflower.browser',
-      'Browser',
-      { viewColumn: column, preserveFocus },
-      { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [assets] }
-    );
+    this.panel = panel;
     this.panel.iconPath = new vscode.ThemeIcon('globe');
-    this.panel.webview.html = webviewHtml(this.panel.webview, assets, 'browser');
+    const tab: TabState = { view: 'browser', workerId, key };
+    this.panel.webview.html = webviewHtml(this.panel.webview, owner.extensionUri, 'browser', tab);
     this.panel.webview.onDidReceiveMessage((message: BrowserPanelMessage) => void this.handle(message));
     // Frames come only while the panel shows.
     this.panel.onDidChangeViewState(() => this.post({ type: 'visible', visible: this.panel.visible }));
@@ -141,8 +138,19 @@ export class BrowserPanels {
       existing.panel.reveal(undefined, preserveFocus);
       return;
     }
-    const panel = new BrowserPanel(this, workerId, key, vscode.ViewColumn.Beside, preserveFocus);
-    this.panels.set(this.id(workerId, key), panel);
+    const tab = createTabPanel(this.extensionUri, 'codeflower.browser', 'Browser', { viewColumn: vscode.ViewColumn.Beside, preserveFocus });
+    this.panels.set(this.id(workerId, key), new BrowserPanel(this, workerId, key, tab));
+  }
+
+  /** A browser tab VS Code restored after a reload; its worker is connected. */
+  async restore(tab: vscode.WebviewPanel, state: Extract<TabState, { view: 'browser' }>): Promise<void> {
+    const id = this.id(state.workerId, state.key);
+    if (this.panels.has(id)) {
+      tab.dispose();
+      return;
+    }
+    // Its state follows when the worker lists its browsers (connected), or is already known.
+    this.panels.set(id, new BrowserPanel(this, state.workerId, state.key, tab));
   }
 
   closed(panel: BrowserPanel): void {
