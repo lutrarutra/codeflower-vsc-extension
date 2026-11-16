@@ -51,7 +51,7 @@
         "codeflower.reports.openInteractive": {
           "type": "boolean",
           "default": true,
-          "description": "Open storyteller reports in their interactive tab (charts, explorers, comments) when the agent shows them or you open one from the chat. Other HTML files open in the static preview."
+          "description": "Show storyteller reports interactive (charts, explorers, comments) when the agent shows them or you open one from the chat; the switch in the report's tab shows the static page. Other HTML files show as a static page until you switch."
         }
       }
     },

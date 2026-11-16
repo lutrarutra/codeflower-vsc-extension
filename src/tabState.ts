@@ -5,7 +5,9 @@ import type { SubagentSummary } from 'codeflower-ui/protocol/subagents.ts';
 
 export type TabState =
   | { view: 'chat'; workerId: string; key: string; title: string; subagent?: SubagentSummary }
-  | { view: 'preview'; workerId: string; path: string; title: string; chatKey?: string }
+  /** `interactive`: an HTML report shows with its scripts running. */
+  | { view: 'preview'; workerId: string; path: string; title: string; chatKey?: string; interactive?: boolean }
+  /** An interactive report's own tab, from before reports ran in their preview tab. */
   | { view: 'report'; workerId: string; path: string; title: string; chatKey?: string }
   | { view: 'browser'; workerId: string; key: string }
   | { view: 'plugins'; workerId: string; agent: string };
@@ -50,7 +52,8 @@ export function parseTabState(view: TabView, state: unknown): TabState | undefin
         workerId,
         path: fields.path,
         title: fields.title,
-        ...(isText(fields.chatKey) ? { chatKey: fields.chatKey } : {})
+        ...(isText(fields.chatKey) ? { chatKey: fields.chatKey } : {}),
+        ...(view === 'preview' && fields.interactive === true ? { interactive: true } : {})
       };
     case 'browser':
       return isText(fields.key) ? { view, workerId, key: fields.key } : undefined;

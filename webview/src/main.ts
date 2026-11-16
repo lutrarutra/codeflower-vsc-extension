@@ -39,7 +39,7 @@ if (!target) {
 
 // One bundle for every webview; the host names the view on <body>.
 if (document.body.dataset.view === 'preview') {
-  mount(Preview, { target, props: { host } });
+  mount(Preview, { target, props: { host, reportFrame: 'webview' } });
 } else if (document.body.dataset.view === 'plugins') {
   mount(Plugins, { target, props: { host } });
 } else if (document.body.dataset.view === 'browser') {

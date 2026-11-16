@@ -42,12 +42,18 @@ export function webviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri, v
   const nonce = randomBytes(16).toString('base64');
   const script = webview.asWebviewUri(vscode.Uri.joinPath(assets, 'main.js'));
   const style = webview.asWebviewUri(vscode.Uri.joinPath(assets, 'main.css'));
+  // A preview runs an HTML report in a sandboxed frame written into the page (srcdoc),
+  // which keeps this policy as well as the report's own: the scripts get the nonce
+  // (and those they add run by 'strict-dynamic'), and the report's data: and blob:
+  // media and workers are allowed. Still no network, and no frame may load a page.
+  const report = view === 'preview';
   const csp = [
     "default-src 'none'",
     `style-src ${webview.cspSource} 'unsafe-inline'`,
-    `font-src ${webview.cspSource}`,
-    `img-src ${webview.cspSource} data:`,
-    `script-src 'nonce-${nonce}'`
+    `font-src ${webview.cspSource}${report ? ' data:' : ''}`,
+    `img-src ${webview.cspSource} data:${report ? ' blob:' : ''}`,
+    ...(report ? ['media-src data: blob:', 'worker-src blob:'] : []),
+    `script-src 'nonce-${nonce}'${report ? " 'strict-dynamic'" : ''}`
   ].join('; ');
   return `<!doctype html>
 <html lang="en">

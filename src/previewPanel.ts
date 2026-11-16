@@ -1,14 +1,22 @@
 // Tabs that show files from a worker's sandbox: the figures, reports and tables
 // the agent shows with `codeflower-show`, or paths clicked in the chat. Each tab
-// follows its file and sends the user's feedback to the chat it came from.
+// follows its file and sends the user's feedback to the chat it came from. An HTML
+// report can show with its scripts running, in a sandboxed frame in the same tab
+// (codeflower-ui's ReportFrame): no network, no local files, and nothing but what
+// the tab's view passes on from it:
+// - its comments (JSON), saved into it;
+// - Print, which a webview may not do: a copy opens in the user's browser and
+//   prints itself there (printCopy.ts);
+// - a file beside it to save (a deck's .pptx).
 import { posix } from 'node:path';
 import * as vscode from 'vscode';
 import type { PreviewHostMessage, PreviewState, PreviewWebviewMessage, SandboxFile } from 'codeflower-ui/protocol/messages.ts';
 import { feedbackAnnotations, feedbackFigure, feedbackText } from 'codeflower-ui/chat/lib/feedback.ts';
+import { isBesideReport, isStorytellerReport } from 'codeflower-ui/chat/lib/report.ts';
 import type { ChatPanels } from './chatPanel.ts';
 import { isFileConflict } from 'codeflower-ui/client/codeflower.ts';
 import { WORKSPACE, type ShowRequest } from 'codeflower-ui/client/workerConnection.ts';
-import { createReportPanel, InteractiveReport, isStorytellerReport, type ReportHost, type ReportTab } from './reportPanel.ts';
+import { servePrintCopy, type PrintCopy } from './printCopy.ts';
 import { TabGone } from './restore.ts';
 import type { TabState } from './tabState.ts';
 import { createTabPanel, postTabState, webviewHtml } from './webviewHtml.ts';
@@ -41,13 +49,13 @@ class PreviewPanel {
   private ready = false;
   private loading: Promise<void> | undefined;
   private readonly timer: ReturnType<typeof setInterval>;
-  /** The same HTML file with its scripts running, when the user opened it. */
-  private interactive: InteractiveReport | undefined;
-  /** Shown or opened again: a storyteller report opens interactive once it has loaded. */
+  /** The HTML file shows with its scripts running. */
+  private interactive = false;
+  /** Shown or opened again: a storyteller report shows interactive once it has loaded. */
   private wantsInteractive = false;
   private commentsSaved: Promise<void> = Promise.resolve();
-  /** Text for the feedback box that came before the page listened. */
-  private pendingDraft: string | undefined;
+  /** The last copy served for printing, dropped at the next print or when the tab closes. */
+  private printCopy: PrintCopy | undefined;
 
   /** `panel`: a new tab, or one VS Code restored. */
   constructor(owner: PreviewPanels, workerId: string, file: SandboxFile, panel: vscode.WebviewPanel) {
@@ -65,30 +73,27 @@ class PreviewPanel {
     this.timer = setInterval(() => void this.poll(), POLL_MS);
     this.panel.onDidDispose(() => {
       clearInterval(this.timer);
-      this.interactive?.panel.dispose();
+      this.printCopy?.close();
       owner.closed(this);
     });
   }
 
   /** What VS Code keeps of the tab to restore it after a reload. */
   private get tab(): Extract<TabState, { view: 'preview' }> {
-    return { view: 'preview', workerId: this.workerId, path: this.file.path, title: this.title, ...(this.chatKey ? { chatKey: this.chatKey } : {}) };
+    return {
+      view: 'preview',
+      workerId: this.workerId,
+      path: this.file.path,
+      title: this.title,
+      ...(this.chatKey ? { chatKey: this.chatKey } : {}),
+      ...(this.interactive ? { interactive: true } : {})
+    };
   }
 
-  private get reportTab(): ReportTab {
-    return { ...this.tab, view: 'report' };
-  }
-
-  /** Where the report's settings, comments and feedback go. */
-  private get reportHost(): ReportHost {
-    return { send: (text) => this.draft(text), saveComments: (json) => this.saveComments(json) };
-  }
-
-  /** The tab's title or chat changed: what VS Code keeps of the tabs follows. */
+  /** The tab's title, chat or way of showing changed: what VS Code keeps of the tabs follows. */
   private tabChanged(): void {
     this.panel.title = this.title;
     if (this.ready) postTabState(this.panel.webview, this.tab);
-    this.interactive?.setTab(this.reportTab);
   }
 
   /** Shows the file again, e.g. when the agent shows it once more. */
@@ -104,31 +109,20 @@ class PreviewPanel {
     void this.load();
   }
 
-  /** Shows the file in a tab VS Code restored; its interactive tab opens only if that was restored too. */
-  restored(options: { title: string; chatKey?: string }): void {
+  /** Shows the file in a tab VS Code restored, as it showed it. */
+  restored(options: { title: string; chatKey?: string; interactive?: boolean }): void {
     this.title = options.title || this.title;
     this.chatKey = options.chatKey;
+    this.interactive = !!options.interactive;
     this.tabChanged();
     void this.load();
   }
 
-  /** Puts text in the feedback box, for the user to read and send. */
-  draft(text: string): void {
-    this.panel.reveal(undefined, false);
-    if (this.ready) this.post({ type: 'draft', text });
-    else this.pendingDraft = text;
-  }
-
-  get hasInteractive(): boolean {
-    return this.interactive !== undefined;
-  }
-
-  /** Takes over an interactive tab of the file that was restored before this preview. */
-  adoptInteractive(report: InteractiveReport): void {
-    this.interactive = report;
-    report.attach(this.reportHost, () => (this.interactive = undefined));
-    report.setTab(this.reportTab);
-    if (this.data && this.file.mimeType === 'text/html') report.update(Buffer.from(this.data, 'base64').toString('utf8'));
+  /** Shows the HTML file with its scripts running, or as a static page. */
+  setInteractive(on: boolean): void {
+    this.interactive = on;
+    this.tabChanged();
+    this.postState();
   }
 
   post(message: PreviewHostMessage): void {
@@ -145,7 +139,8 @@ class PreviewPanel {
       title: this.title,
       message: this.messageFor === this.file.mtimeMs ? this.message : null,
       chat: chat ?? (this.chatKey ? { title: 'the chat', busy: false } : null),
-      live: !!this.owner.workers.get(this.workerId)?.connection?.connected
+      live: !!this.owner.workers.get(this.workerId)?.connection?.connected,
+      interactive: this.interactive
     };
     this.post({ type: 'preview', state });
   }
@@ -158,14 +153,16 @@ class PreviewPanel {
         this.file = info;
         this.data = data;
         this.error = null;
-        const html = info.mimeType === 'text/html' ? Buffer.from(data, 'base64').toString('utf8') : '';
-        this.interactive?.update(html);
         if (this.wantsInteractive) {
           this.wantsInteractive = false;
-          // Charts, explorers and comments only work with the scripts running; the static
-          // preview stays behind it with the feedback box.
+          // Charts, explorers and comments only work with the scripts running; the tab's
+          // switch shows the static page.
           const enabled = vscode.workspace.getConfiguration('codeflower').get('reports.openInteractive', true);
-          if (enabled && isStorytellerReport(html)) this.openInteractive(true);
+          const html = info.mimeType === 'text/html' ? Buffer.from(data, 'base64').toString('utf8') : '';
+          if (enabled && isStorytellerReport(html) && !this.interactive) {
+            this.interactive = true;
+            this.tabChanged();
+          }
         }
         if (this.noteShown) {
           this.messageFor = info.mtimeMs;
@@ -183,8 +180,7 @@ class PreviewPanel {
   }
 
   private async poll(): Promise<void> {
-    // The interactive tab follows the file too, while the preview is in the background.
-    if (!(this.panel.visible || this.interactive?.panel.visible) || this.loading) return;
+    if (!this.panel.visible || this.loading) return;
     const connection = this.owner.workers.get(this.workerId)?.connection;
     if (!connection?.connected) return;
     try {
@@ -210,21 +206,27 @@ class PreviewPanel {
       });
   }
 
-  /** Opens the HTML file in a tab where its scripts run (no network, no local files). */
-  private openInteractive(preserveFocus = false): void {
+  /** Opens the report in the user's browser, which prints it. */
+  private async print(): Promise<void> {
     if (!this.data || this.file.mimeType !== 'text/html') return;
-    if (!this.interactive) {
-      // Settings chosen in the report, or comments for the agent, go into the feedback box, for the user to send.
-      this.interactive = new InteractiveReport(
-        createReportPanel(this.title, this.panel.viewColumn ?? vscode.ViewColumn.Beside, preserveFocus),
-        this.reportTab,
-        this.owner.icon,
-        this.reportHost,
-        () => (this.interactive = undefined)
-      );
+    try {
+      this.printCopy?.close();
+      this.printCopy = await servePrintCopy(Buffer.from(this.data, 'base64').toString('utf8'));
+      const uri = await vscode.env.asExternalUri(vscode.Uri.parse(this.printCopy.url, true));
+      if (!(await vscode.env.openExternal(uri))) throw new Error('no browser opened it');
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not open ${this.title} in your browser to print it: ${describe(error)}`);
     }
-    this.interactive.update(Buffer.from(this.data, 'base64').toString('utf8'));
-    this.interactive.reveal(preserveFocus);
+  }
+
+  /** Asks where to save a copy of a file (base64) on this machine. */
+  private async saveCopy(name: string, data: string): Promise<void> {
+    const target = await vscode.window.showSaveDialog({
+      defaultUri: vscode.Uri.joinPath(vscode.workspace.workspaceFolders?.[0]?.uri ?? vscode.Uri.file(process.env.HOME ?? '/'), name)
+    });
+    if (!target) return;
+    await vscode.workspace.fs.writeFile(target, Buffer.from(data, 'base64'));
+    void vscode.window.showInformationMessage(`Saved ${name} to ${target.fsPath}`);
   }
 
   private async handle(message: PreviewWebviewMessage): Promise<void> {
@@ -233,8 +235,6 @@ class PreviewPanel {
         this.ready = true;
         postTabState(this.panel.webview, this.tab);
         this.postState();
-        if (this.pendingDraft !== undefined) this.post({ type: 'draft', text: this.pendingDraft });
-        this.pendingDraft = undefined;
         break;
       case 'feedback': {
         if (!this.chatKey) {
@@ -270,17 +270,18 @@ class PreviewPanel {
           this.chatKey
         );
         break;
-      case 'save': {
-        if (!this.data) return;
-        const target = await vscode.window.showSaveDialog({
-          defaultUri: vscode.Uri.joinPath(
-            vscode.workspace.workspaceFolders?.[0]?.uri ?? vscode.Uri.file(process.env.HOME ?? '/'),
-            posix.basename(this.file.path)
-          )
-        });
-        if (!target) return;
-        await vscode.workspace.fs.writeFile(target, Buffer.from(this.data, 'base64'));
-        void vscode.window.showInformationMessage(`Saved ${posix.basename(this.file.path)} to ${target.fsPath}`);
+      case 'save':
+        if (this.data) await this.saveCopy(posix.basename(this.file.path), this.data);
+        break;
+      case 'download': {
+        // Only a file in the report's own folder.
+        if (!isBesideReport(message.path)) return;
+        try {
+          const file = await this.owner.workers.require(this.workerId).readFile(posix.join(posix.dirname(this.file.path), message.path));
+          await this.saveCopy(message.path, file.data);
+        } catch (error) {
+          void vscode.window.showErrorMessage(`Could not download ${message.path}: ${describe(error)}`);
+        }
         break;
       }
       case 'write':
@@ -304,28 +305,25 @@ class PreviewPanel {
         if (this.chatKey) this.owner.chats.reveal(this.workerId, this.chatKey);
         break;
       case 'interactive':
-        this.openInteractive();
+        this.setInteractive(message.on);
+        break;
+      case 'reportComments':
+        this.saveComments(message.json);
+        break;
+      case 'print':
+        await this.print();
         break;
     }
   }
 }
 
-/**
- * Closes a restored tab that VS Code has not shown yet (it revives a tab only when it
- * first shows), found by its kind and title in a group; only when exactly one matches.
- */
-async function closeUnshownTab(viewType: string, label: string, column: vscode.ViewColumn | undefined): Promise<void> {
-  const matches = vscode.window.tabGroups.all
-    .filter((group) => column === undefined || group.viewColumn === column)
-    .flatMap((group) => group.tabs)
-    .filter((tab) => tab.input instanceof vscode.TabInputWebview && tab.input.viewType.endsWith(viewType) && tab.label === label);
-  if (matches.length === 1) await vscode.window.tabGroups.close(matches[0]!, true);
-}
-
 export class PreviewPanels {
   private readonly panels = new Map<string, PreviewPanel>();
-  /** Interactive tabs VS Code restored while their file's preview was not open; it takes them over when it opens. */
-  private readonly reports = new Map<string, InteractiveReport>();
+  /**
+   * Files whose interactive report tab, from before reports ran in their preview tab,
+   * VS Code restored before their preview: the preview shows them interactive.
+   */
+  private readonly interactiveOnRestore = new Set<string>();
   readonly extensionUri: vscode.Uri;
   readonly workers: WorkerManager;
   readonly chats: ChatPanels;
@@ -353,104 +351,44 @@ export class PreviewPanels {
 
   /** A preview of the file in `tab`, or in a new tab in `column`. */
   private add(workerId: string, file: SandboxFile, tab: vscode.WebviewPanel | vscode.ViewColumn): PreviewPanel {
-    const id = this.id(workerId, file.path);
     const panel = new PreviewPanel(
       this,
       workerId,
       file,
       typeof tab === 'object' ? tab : createTabPanel(this.extensionUri, 'codeflower.preview', posix.basename(file.path), { viewColumn: tab, preserveFocus: true })
     );
-    this.panels.set(id, panel);
-    const report = this.reports.get(id);
-    if (report) {
-      this.reports.delete(id);
-      panel.adoptInteractive(report);
-    }
+    this.panels.set(this.id(workerId, file.path), panel);
     return panel;
-  }
-
-  /** The file a restored tab showed, or why it cannot show it. */
-  private async restoredFile(workerId: string, path: string): Promise<SandboxFile> {
-    try {
-      return await this.workers.require(workerId).statFile(path);
-    } catch (error) {
-      throw new TabGone(`Cannot show ${posix.basename(path)}`, `${displayPath(path)}: ${describe(error)}`);
-    }
   }
 
   /** A preview tab VS Code restored after a reload; its worker is connected. */
   async restore(tab: vscode.WebviewPanel, state: Extract<TabState, { view: 'preview' }>): Promise<void> {
-    const file = await this.restoredFile(state.workerId, state.path);
+    const id = this.id(state.workerId, state.path);
+    let file: SandboxFile;
+    try {
+      file = await this.workers.require(state.workerId).statFile(state.path);
+    } catch (error) {
+      throw new TabGone(`Cannot show ${posix.basename(state.path)}`, `${displayPath(state.path)}: ${describe(error)}`);
+    }
     // One tab per file: the file may have been opened again before this tab showed.
-    if (this.panels.has(this.id(state.workerId, state.path))) {
+    if (this.panels.has(id)) {
       tab.dispose();
       return;
     }
-    this.add(state.workerId, file, tab).restored({ title: state.title, chatKey: state.chatKey });
+    const legacy = this.interactiveOnRestore.delete(id);
+    this.add(state.workerId, file, tab).restored({ title: state.title, chatKey: state.chatKey, interactive: state.interactive || legacy });
   }
 
   /**
-   * An interactive report tab VS Code restored. Its preview takes it, if open;
-   * else it shows on its own until the preview opens, which the report's
-   * feedback does (the two usually share a group, so the preview shows later).
+   * An interactive report tab of an older version, which VS Code restored: the report
+   * now runs in its preview tab, which shows it interactive.
    */
-  async restoreReport(tab: vscode.WebviewPanel, state: ReportTab): Promise<void> {
+  async restoreReport(tab: vscode.WebviewPanel, state: Extract<TabState, { view: 'report' }>): Promise<void> {
+    tab.dispose();
     const id = this.id(state.workerId, state.path);
-    const connection = this.workers.require(state.workerId);
-    let html = '';
-    if (!this.panels.has(id)) {
-      try {
-        html = Buffer.from((await connection.readPreview(state.path)).data, 'base64').toString('utf8');
-      } catch (error) {
-        throw new TabGone(`Cannot show ${posix.basename(state.path)}`, `${displayPath(state.path)}: ${describe(error)}`);
-      }
-    }
     const preview = this.panels.get(id);
-    if ((preview && preview.hasInteractive) || this.reports.has(id)) {
-      tab.dispose();
-      return;
-    }
-    const report = new InteractiveReport(tab, state, this.icon, this.standaloneHost(state), () => this.reports.delete(id));
-    if (preview) {
-      preview.adoptInteractive(report);
-      return;
-    }
-    this.reports.set(id, report);
-    report.update(html);
-  }
-
-  /** Where a report restored without its preview sends to: the preview, opened beside it. */
-  private standaloneHost(state: ReportTab): ReportHost {
-    const { workerId, path } = state;
-    return {
-      send: (text) => {
-        const column = this.reports.get(this.id(workerId, path))?.panel.viewColumn;
-        void (async () => {
-          const file = await this.restoredFile(workerId, path);
-          let preview = this.panels.get(this.id(workerId, path));
-          if (!preview) {
-            // Its restored tab has not shown yet, so this one replaces it; unless a shown tab of
-            // another file has the same title there, and the tabs cannot be told apart.
-            const sameTitle = [...this.panels.values()].some((other) => other.panel.title === state.title && other.panel.viewColumn === column);
-            if (!sameTitle) await closeUnshownTab('codeflower.preview', state.title, column);
-            preview = this.panels.get(this.id(workerId, path)) ?? this.add(workerId, file, column ?? this.column());
-            preview.restored({ title: state.title, chatKey: state.chatKey });
-          }
-          preview.draft(text);
-        })().catch((error: unknown) => void vscode.window.showErrorMessage(describe(error)));
-      },
-      saveComments: (json) => {
-        const connection = this.workers.get(workerId)?.connection;
-        void (async () => {
-          if (!connection?.connected) throw new Error('The worker is not connected');
-          await connection.saveReportComments(path, json);
-          const file = await connection.readPreview(path);
-          this.reports.get(this.id(workerId, path))?.update(Buffer.from(file.data, 'base64').toString('utf8'));
-        })().catch((error: unknown) => {
-          void vscode.window.showErrorMessage(`Could not save the comments on ${state.title}: ${describe(error)}`);
-        });
-      }
-    };
+    if (preview) preview.setInteractive(true);
+    else this.interactiveOnRestore.add(id);
   }
 
   /** Previews share a column beside the chat. */

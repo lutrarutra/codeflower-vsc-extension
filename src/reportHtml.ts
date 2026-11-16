@@ -1,9 +1,6 @@
-// The HTML an interactive report tab loads: the report itself, behind a policy that
-// keeps it off the network and away from local files, with a small bridge to the
-// extension (see reportPanel.ts). Also the copy that prints itself in the user's
-// browser (see printCopy.ts), as a webview may not open the print dialog.
-
-import { scriptJson, type TabState } from './tabState.ts';
+// The copy of a report that prints itself in the user's browser (see printCopy.ts),
+// as a webview may not open the print dialog, behind a policy that keeps it off the
+// network. The report itself runs in its preview tab (codeflower-ui's ReportFrame).
 
 /** Content-Security-Policy for an untrusted, self-contained page. */
 export const REPORT_CSP = [
@@ -16,21 +13,6 @@ export const REPORT_CSP = [
   'worker-src blob:'
 ].join('; ');
 
-// Defined before the report's own scripts run, so its runtime finds the host.
-// It also keeps what the tab is (tabState.ts) for VS Code to restore it; the
-// report's scripts cannot reach the API to change that.
-const bridge = (tab: string) => `<script>(() => {
-  const api = acquireVsCodeApi();
-  api.setState(${tab});
-  const text = (value) => String(value).slice(0, 20000);
-  window.cfHost = Object.freeze({
-    send: (value) => api.postMessage({ type: 'send', text: text(value) }),
-    reload: () => api.postMessage({ type: 'reload' }),
-    print: () => api.postMessage({ type: 'print' }),
-    saveComments: (json) => typeof json === 'string' && json.length <= 2000000 && api.postMessage({ type: 'comments', json })
-  });
-})();</script>`;
-
 /** The report with `head` at the start of its head. */
 function withHead(html: string, head: string): string {
   const match = /<head[^>]*>/i.exec(html);
@@ -40,11 +22,6 @@ function withHead(html: string, head: string): string {
 
 const POLICY = `<meta http-equiv="Content-Security-Policy" content="${REPORT_CSP}">`;
 
-/** The report with the policy and the host bridge at the start of its head. */
-export function interactiveHtml(html: string, tab: TabState): string {
-  return withHead(html, POLICY + bridge(scriptJson(tab)));
-}
-
 // Opens the print dialog once the copy has loaded and its fonts are ready.
 const PRINT = `<script>addEventListener('load', () => {
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => setTimeout(() => print(), 200));
@@ -52,7 +29,7 @@ const PRINT = `<script>addEventListener('load', () => {
 
 /**
  * The report as a copy for the user's browser that prints itself once loaded: the
- * policy but no bridge, so its own Print button prints it there again.
+ * policy but no host bridge, so its own Print button prints it there again.
  */
 export function printableHtml(html: string): string {
   const page = withHead(html, POLICY);

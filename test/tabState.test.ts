@@ -8,6 +8,7 @@ test('each kind of tab comes back as it was kept', () => {
   const tabs = [
     { view: 'chat', workerId: WORKER, key: 'claude:abc', title: 'Cluster the cells' },
     { view: 'preview', workerId: WORKER, path: '/data/output/umap.png', title: 'umap.png', chatKey: 'claude:abc' },
+    { view: 'preview', workerId: WORKER, path: '/data/output/report.html', title: 'report.html', interactive: true },
     { view: 'report', workerId: WORKER, path: '/data/output/report.html', title: 'report.html' },
     { view: 'browser', workerId: WORKER, key: 'claude:abc' },
     { view: 'plugins', workerId: WORKER, agent: 'claude' }
