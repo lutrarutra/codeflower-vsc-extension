@@ -38,6 +38,7 @@
   ],
   "activationEvents": [
     "onUri",
+    "onStartupFinished",
     "onWebviewPanel:codeflower.chat",
     "onWebviewPanel:codeflower.preview",
     "onWebviewPanel:codeflower.report",

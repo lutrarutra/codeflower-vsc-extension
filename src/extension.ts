@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { parseWorkerAddress } from 'codeflower-ui/client/address.ts';
+import { workerLinks } from './terminalLinks.ts';
 import { hostPath } from 'codeflower-ui/client/hostPaths.ts';
 import { pastedLine } from './pastedLine.ts';
 import { ChatPanels } from './chatPanel.ts';
@@ -156,24 +157,35 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  // A link asks to connect: any program can print or open one, so the user
+  // confirms where to.
+  const connectFromLink = async (text: string) => {
+    const address = parseWorkerAddress(text);
+    const choice = await vscode.window.showInformationMessage(
+      `Connect to the code flower sandbox at ${address.display}?`,
+      { modal: true, detail: 'Only connect to sandboxes you started yourself, for example from the code flower app.' },
+      'Connect'
+    );
+    if (choice !== 'Connect') return;
+    await vscode.commands.executeCommand('workbench.view.extension.codeflower');
+    await connect(text);
+  };
+
   context.subscriptions.push(
     // The app window's "Open in VS Code" button:
     //   vscode://codeflower.codeflower/connect?address=codeflower://…
     vscode.window.registerUriHandler({
       handleUri: guarded(async (uri: vscode.Uri) => {
         if (uri.path !== '/connect') return;
-        const text = new URLSearchParams(uri.query).get('address') ?? '';
-        const address = parseWorkerAddress(text);
-        // Any link can ask to connect, so the user confirms where to.
-        const choice = await vscode.window.showInformationMessage(
-          `Connect to the code flower sandbox at ${address.display}?`,
-          { modal: true, detail: 'Only connect to sandboxes you started yourself, for example from the code flower app.' },
-          'Connect'
-        );
-        if (choice !== 'Connect') return;
-        await vscode.commands.executeCommand('workbench.view.extension.codeflower');
-        await connect(text);
+        await connectFromLink(new URLSearchParams(uri.query).get('address') ?? '');
       })
+    }),
+    // Ctrl+click on a worker's codeflower://… line (or its vscode:// link) in
+    // the terminal, which VS Code would cut at the "?".
+    vscode.window.registerTerminalLinkProvider({
+      provideTerminalLinks: (context: vscode.TerminalLinkContext) =>
+        workerLinks(context.line).map((link) => ({ ...link, tooltip: 'Connect to this code flower sandbox' })),
+      handleTerminalLink: guarded((link: vscode.TerminalLink) => connectFromLink((link as vscode.TerminalLink & { address: string }).address))
     }),
     workers,
     plugins,
