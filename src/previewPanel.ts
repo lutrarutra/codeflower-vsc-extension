@@ -273,6 +273,10 @@ class PreviewPanel {
       case 'save':
         if (this.data) await this.saveCopy(posix.basename(this.file.path), this.data);
         break;
+      case 'saveFigure':
+        // A report's figure, from the overlay: its image as clicked, under a plain name.
+        if (isBesideReport(message.name)) await this.saveCopy(message.name, message.data);
+        break;
       case 'download': {
         // Only a file in the report's own folder.
         if (!isBesideReport(message.path)) return;
