@@ -10,7 +10,7 @@ import { PreviewPanels } from './previewPanel.ts';
 import { BrowserPanels, chatBrowser } from './browserPanel.ts';
 import { SignIn } from './signIn.ts';
 import { CommandTerminals } from './commandTerminals.ts';
-import { ShellTerminals } from './shellTerminals.ts';
+import { sandboxLabel, ShellTerminals } from './shellTerminals.ts';
 import { pickAgent, setIconDirectory } from './agentIcons.ts';
 import { attentionStatusBar } from './statusBar.ts';
 import { WorkerTree, type TreeNode } from './tree.ts';
@@ -105,7 +105,7 @@ export function activate(context: vscode.ExtensionContext): void {
   previews = new PreviewPanels(context.extensionUri, workers, panels);
   panels.openFile = (workerId, key, path) => void previews!.openPath(workerId, path, key);
   panels.openCommand = (workerId, command, agentName) => commandTerminals!.show(workerId, command, agentName);
-  panels.openShell = (workerId, sandboxName) => shellTerminals!.show(workerId, sandboxName);
+  panels.openShell = (workerId) => shellTerminals!.show(workerId);
   browsers = new BrowserPanels(context.extensionUri, workers);
   panels.openBrowser = (workerId, key) => browsers!.open(workerId, key, false);
   panels.browserOf = (workerId, key) => chatBrowser(browsers!.state(workerId, key));
@@ -254,6 +254,31 @@ export function activate(context: vscode.ExtensionContext): void {
       })
     ),
     vscode.commands.registerCommand('codeflower.newSession', guarded(newSession)),
+    // A shell in a sandbox, from its row in the sidebar or the command palette (the user picks among several).
+    vscode.commands.registerCommand(
+      'codeflower.openShell',
+      guarded(async (node?: TreeNode) => {
+        const connected = [...workers.workers.values()].filter((worker) => worker.state === 'connected');
+        let workerId = node?.workerId;
+        if (!workerId) {
+          if (!connected.length) throw new Error('No sandbox is connected: connect one first ("code flower: Connect to worker…").');
+          workerId =
+            connected.length === 1
+              ? connected[0]!.id
+              : (
+                  await vscode.window.showQuickPick(
+                    connected.map((worker) => ({ label: sandboxLabel(worker.status?.stateDirectory, worker.id), description: worker.id, id: worker.id })),
+                    { title: 'Open a shell in' }
+                  )
+                )?.id;
+          if (!workerId) return;
+        }
+        if (!workers.require(workerId).shellTerminals) {
+          throw new Error('This sandbox cannot open a shell: its image is older than that. Start it again with a current code flower.');
+        }
+        shellTerminals!.show(workerId);
+      })
+    ),
     vscode.commands.registerCommand(
       'codeflower.openSession',
       guarded((node: TreeNode) => (node.kind === 'session' ? panels!.open(node.workerId, node.key) : undefined))

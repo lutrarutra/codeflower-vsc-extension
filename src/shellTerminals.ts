@@ -6,6 +6,11 @@
 import * as vscode from 'vscode';
 import type { WorkerManager } from './workers.ts';
 
+/** A sandbox as the sidebar names it: its project folder's name, else its address. */
+export function sandboxLabel(stateDirectory: string | null | undefined, workerId: string): string {
+  return stateDirectory?.split('/').filter(Boolean).at(-1) ?? workerId;
+}
+
 class ShellTerminal implements vscode.Pseudoterminal {
   private readonly written = new vscode.EventEmitter<string>();
   private readonly closed = new vscode.EventEmitter<number | void>();
@@ -102,8 +107,9 @@ export class ShellTerminals {
     return this.open.has(terminalId);
   }
 
-  /** Starts a shell in the sandbox's workspace, in a terminal in VS Code's panel. */
-  show(workerId: string, sandboxName: string): void {
+  /** Starts a shell in the sandbox's workspace, in a terminal in VS Code's panel, named after its project. */
+  show(workerId: string): void {
+    const sandboxName = sandboxLabel(this.workers.get(workerId)?.status?.stateDirectory, workerId);
     const connection = () => this.workers.require(workerId);
     const shell = new ShellTerminal({
       start: (columns, rows) => connection().startShell(columns, rows),

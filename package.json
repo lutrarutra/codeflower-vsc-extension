@@ -99,6 +99,12 @@
         "icon": "$(comment-discussion)"
       },
       {
+        "command": "codeflower.openShell",
+        "title": "Open shell in sandbox",
+        "category": "code flower",
+        "icon": "$(terminal)"
+      },
+      {
         "command": "codeflower.signIn",
         "title": "Sign in…",
         "category": "code flower",
@@ -188,6 +194,11 @@
         {
           "command": "codeflower.reconnectWorker",
           "when": "view == codeflower.workers && viewItem == worker.disconnected",
+          "group": "inline@2"
+        },
+        {
+          "command": "codeflower.openShell",
+          "when": "view == codeflower.workers && viewItem =~ /^worker\\.connected/",
           "group": "inline@2"
         },
         {
