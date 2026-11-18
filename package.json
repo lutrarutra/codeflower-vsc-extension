@@ -217,6 +217,11 @@
           "group": "inline@1"
         },
         {
+          "command": "codeflower.newSession",
+          "when": "view == codeflower.workers && viewItem == chats",
+          "group": "inline@1"
+        },
+        {
           "command": "codeflower.plugins",
           "when": "view == codeflower.workers && viewItem =~ /^agent\\.\\w+\\.plugins$/",
           "group": "inline@2"

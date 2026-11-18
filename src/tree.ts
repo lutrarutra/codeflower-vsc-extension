@@ -85,6 +85,9 @@ export type TreeNode =
   /** The worker's agents, and one of them. */
   | { kind: 'agents'; workerId: string }
   | { kind: 'agent'; workerId: string; agent: string }
+  /** The worker's folders, and its chats: a sandbox's other two sections. */
+  | { kind: 'files'; workerId: string }
+  | { kind: 'chats'; workerId: string }
   | { kind: 'group'; workerId: string; root: string; label: string; icon: string; mounts: Mount[] }
   | { kind: 'folder'; workerId: string; path: string; label: string; icon?: string; source?: string; readOnly?: boolean }
   | { kind: 'file'; workerId: string; path: string; label: string; size: number; mtimeMs: number }
@@ -125,6 +128,16 @@ export class WorkerTree implements vscode.TreeDataProvider<TreeNode> {
     if (node.kind === 'agents') {
       return (this.workers.get(node.workerId)?.agents ?? []).map((agent) => ({ kind: 'agent', workerId: node.workerId, agent: agent.id }));
     }
+    if (node.kind === 'files') {
+      const worker = this.workers.get(node.workerId);
+      return worker ? folders(worker.id, worker.status?.mounts) : [];
+    }
+    if (node.kind === 'chats') {
+      const worker = this.workers.get(node.workerId);
+      if (!worker) return [];
+      if (!worker.sessions.length) return [{ kind: 'message', workerId: worker.id, text: 'No sessions yet' }];
+      return worker.sessions.map((session) => ({ kind: 'session', workerId: worker.id, key: session.key }));
+    }
     if (node.kind !== 'worker') return [];
     const worker = this.workers.get(node.workerId);
     if (!worker) return [];
@@ -135,11 +148,10 @@ export class WorkerTree implements vscode.TreeDataProvider<TreeNode> {
         : `Not reachable${worker.error ? `: ${worker.error}` : ''}`;
       return [{ kind: 'message', workerId: worker.id, text }];
     }
+    // Three sections, the short ones first so the long chat list does not push them out of sight.
     const children: TreeNode[] = [];
     if (worker.agents.length) children.push({ kind: 'agents', workerId: worker.id });
-    children.push(...folders(worker.id, worker.status?.mounts));
-    for (const session of worker.sessions) children.push({ kind: 'session', workerId: worker.id, key: session.key });
-    if (!worker.sessions.length) children.push({ kind: 'message', workerId: worker.id, text: 'No sessions yet' });
+    children.push({ kind: 'files', workerId: worker.id }, { kind: 'chats', workerId: worker.id });
     return children;
   }
 
@@ -189,11 +201,11 @@ export class WorkerTree implements vscode.TreeDataProvider<TreeNode> {
         return item;
       }
       case 'agents': {
-        // Open while an agent has yet to sign in.
-        const waiting = worker?.agents.some((agent) => !agent.signedIn && !agent.unavailable);
+        // Open while no agent can answer yet; agents the user leaves signed out keep it folded.
+        const none = !worker?.agents.some((agent) => agent.signedIn && !agent.unavailable);
         const item = new vscode.TreeItem(
           'Agents',
-          waiting ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed
+          none ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed
         );
         item.id = `agents:${node.workerId}`;
         item.iconPath = new vscode.ThemeIcon('hubot');
@@ -203,6 +215,37 @@ export class WorkerTree implements vscode.TreeDataProvider<TreeNode> {
       }
       case 'agent':
         return this.agentItem(worker, worker?.agents.find((agent) => agent.id === node.agent), node);
+      case 'files': {
+        // Folded until opened: what it holds shows beside it.
+        const item = new vscode.TreeItem('Files', vscode.TreeItemCollapsibleState.Collapsed);
+        item.id = `files:${node.workerId}`;
+        item.iconPath = new vscode.ThemeIcon('files');
+        item.description = folders(node.workerId, worker?.status?.mounts)
+          .map((folder) => (folder.kind === 'folder' || folder.kind === 'group' ? folder.label : ''))
+          .filter(Boolean)
+          .join(' · ');
+        return item;
+      }
+      case 'chats': {
+        const sessions = worker?.sessions ?? [];
+        const item = new vscode.TreeItem('Chats', vscode.TreeItemCollapsibleState.Expanded);
+        item.id = `chats:${node.workerId}`;
+        item.iconPath = new vscode.ThemeIcon('comment-discussion');
+        // Folded, it still tells which chats need you or work.
+        const count = (status: SessionStatus) =>
+          sessions.filter((session) => this.statuses.status(node.workerId, session.key) === status).length;
+        const waiting = count('waiting');
+        const working = count('working');
+        item.description = [
+          `${sessions.length}`,
+          waiting ? `${waiting} need${waiting === 1 ? 's' : ''} you` : '',
+          working ? `${working} working` : ''
+        ]
+          .filter(Boolean)
+          .join(' · ');
+        item.contextValue = 'chats';
+        return item;
+      }
       case 'group': {
         const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Expanded);
         item.id = `group:${node.workerId}:${node.root}`;
