@@ -403,7 +403,7 @@ export class PreviewPanels {
     if (chatKey) {
       void this.workers
         .get(workerId)
-        ?.connection?.recordShow(chatKey, request.files.map((file) => file.path), request.message)
+        ?.connection?.recordShow(chatKey, request.files.map((file) => file.path), request.message, request.noted === true)
         .catch(() => undefined);
     }
     for (const file of request.files) {
