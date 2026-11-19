@@ -21,6 +21,8 @@ class ShellTerminal implements vscode.Pseudoterminal {
   private ended = false;
   /** Typed before the shell started. */
   private pending = '';
+  /** The terminal's size now, which can change before the shell started. */
+  private dimensions: vscode.TerminalDimensions = { columns: 100, rows: 30 };
 
   private readonly start: (columns: number, rows: number) => Promise<string>;
   private readonly attach: (terminalId: string, columns: number, rows: number) => Promise<void>;
@@ -49,14 +51,14 @@ class ShellTerminal implements vscode.Pseudoterminal {
   }
 
   open(dimensions: vscode.TerminalDimensions | undefined): void {
-    const columns = dimensions?.columns ?? 100;
-    const rows = dimensions?.rows ?? 30;
-    this.start(columns, rows).then(
+    if (dimensions) this.dimensions = dimensions;
+    this.start(this.dimensions.columns, this.dimensions.rows).then(
       async (terminalId) => {
         this.terminalId = terminalId;
         this.started(this);
-        // As the page's terminal tab does: shown here, with what it printed so far.
-        await this.attach(terminalId, columns, rows).catch(() => undefined);
+        // As the page's terminal tab does: shown here, with what it printed so far,
+        // at the size the terminal has by now.
+        await this.attach(terminalId, this.dimensions.columns, this.dimensions.rows).catch(() => undefined);
         if (this.pending) void this.input(terminalId, this.pending).catch(() => undefined);
         this.pending = '';
       },
@@ -84,6 +86,7 @@ class ShellTerminal implements vscode.Pseudoterminal {
   }
 
   setDimensions(dimensions: vscode.TerminalDimensions): void {
+    this.dimensions = dimensions;
     if (this.terminalId && !this.ended) void this.resize(this.terminalId, dimensions.columns, dimensions.rows).catch(() => undefined);
   }
 
