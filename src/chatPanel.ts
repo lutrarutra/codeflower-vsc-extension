@@ -62,6 +62,8 @@ class ChatPanel {
   /** The index of `entries[0]` in the transcript; earlier ones load when the view asks. */
   private start = 0;
   private context: TranscriptEntry[] = [];
+  /** A transcript came from the worker; until then the view shows it loading, not empty. */
+  private transcriptLoaded = false;
   private loadingEarlier = false;
   private pending: PendingPermission | null = null;
   private question: PendingQuestion | null = null;
@@ -273,6 +275,7 @@ class ChatPanel {
       return;
     }
     if (message.type === 'transcript') {
+      this.transcriptLoaded = true;
       this.entries = [...message.entries];
       this.start = message.start ?? 0;
       this.context = message.context ?? [];
@@ -356,12 +359,14 @@ class ChatPanel {
         // What changed before the page listened.
         postTabState(this.panel.webview, this.tab);
         void this.panel.webview.postMessage({ type: 'state', state: this.state } satisfies HostMessage);
-        void this.panel.webview.postMessage({
-          type: 'transcript',
-          entries: this.entries,
-          start: this.start,
-          context: this.context
-        } satisfies HostMessage);
+        if (this.transcriptLoaded) {
+          void this.panel.webview.postMessage({
+            type: 'transcript',
+            entries: this.entries,
+            start: this.start,
+            context: this.context
+          } satisfies HostMessage);
+        }
         void this.panel.webview.postMessage({ type: 'permission', request: this.pending } satisfies HostMessage);
         void this.panel.webview.postMessage({ type: 'question', request: this.question } satisfies HostMessage);
         void this.panel.webview.postMessage({ type: 'config', options: this.config } satisfies HostMessage);
