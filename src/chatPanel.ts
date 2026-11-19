@@ -11,6 +11,7 @@ import {
   type HostMessage,
   type PendingPermission,
   type PendingQuestion,
+  type SandboxChat,
   type SessionStatus,
   type TranscriptEntry,
   type WebviewMessage
@@ -73,6 +74,8 @@ class ChatPanel {
   subagents: SubagentSummary[] = [];
   private subagentSettings: SubagentSettingsState | null = null;
   private readonly openSubagent: (key: string) => void;
+  private readonly listChats: () => void;
+  private readonly openChat: (key: string) => void;
   private readonly openCommand: (command: AgentCommand) => void;
   private readonly openShell: () => void;
   private readonly openBrowser: () => void;
@@ -124,6 +127,10 @@ class ChatPanel {
     onFavoriteModel: (value: string, pinned: boolean) => void;
     /** Shows a subagent's chat, or this subagent chat's parent. */
     onOpenSubagent: (key: string) => void;
+    /** Posts the sandbox's chats for the header's list (`chats`). */
+    onListChats: () => void;
+    /** Shows another chat of the sandbox: its tab if open, else a new one. */
+    onOpenChat: (key: string) => void;
     /** Shows a command the chat's agent runs, read-only. */
     onOpenCommand: (command: AgentCommand) => void;
     /** Opens a shell in the chat's sandbox, in VS Code's terminal panel. */
@@ -152,6 +159,8 @@ class ChatPanel {
       ...(options.subagent ? { subagent: options.subagent } : {})
     };
     this.openSubagent = options.onOpenSubagent;
+    this.listChats = options.onListChats;
+    this.openChat = options.onOpenChat;
     this.openCommand = options.onOpenCommand;
     this.openShell = options.onOpenShell;
     this.openBrowser = options.onOpenBrowser;
@@ -471,6 +480,12 @@ class ChatPanel {
       case 'openParent':
         if (this.state.subagent) this.openSubagent(this.state.subagent.parentKey);
         break;
+      case 'listChats':
+        this.listChats();
+        break;
+      case 'openChat':
+        this.openChat(message.key);
+        break;
       case 'openShell':
         this.openShell();
         break;
@@ -731,6 +746,8 @@ export class ChatPanels {
       favoriteModels: this.favoriteModels(agent.id),
       onFavoriteModel: (value, pinned) => this.setFavoriteModel(agent.id, value, pinned),
       onOpenSubagent: (target) => void this.open(workerId, target).catch((error) => panel.reportError(error)),
+      onListChats: () => void this.listChats(workerId, panel),
+      onOpenChat: (target) => void this.open(workerId, target).catch((error) => panel.reportError(error)),
       onOpenCommand: (command) => this.openCommand(workerId, command, agent.name ?? agentOfKey(panel.key)),
       onOpenShell: () => this.openShell(workerId, workerId),
       onOpenBrowser: () => this.openBrowser(workerId, panel.key),
@@ -742,6 +759,28 @@ export class ChatPanels {
     this.workers.refreshUsage(workerId, agent.id);
     panel.post({ type: 'subagentSettings', state: worker?.subagentSettings[agent.id] ?? null });
     return panel;
+  }
+
+  /** The worker's chats for a chat's header: as known now, then again once listed afresh. */
+  private async listChats(workerId: string, panel: ChatPanel): Promise<void> {
+    panel.post({ type: 'chats', chats: this.sandboxChats(workerId, panel.key) });
+    await this.workers.refresh(workerId);
+    panel.post({ type: 'chats', chats: this.sandboxChats(workerId, panel.key) });
+  }
+
+  private sandboxChats(workerId: string, current: string): SandboxChat[] {
+    return (this.workers.get(workerId)?.sessions ?? []).map((session) => {
+      const open = this.panels.get(this.id(workerId, session.key));
+      const status = open?.sessionStatus;
+      return {
+        key: session.key,
+        title: open?.title || session.title,
+        agent: this.presentation(workerId, session.key),
+        updatedAt: session.updatedAt,
+        ...(status ? { status } : {}),
+        ...(session.key === current ? { current: true } : {})
+      };
+    });
   }
 
   /** A new chat with one of the worker's agents. */
