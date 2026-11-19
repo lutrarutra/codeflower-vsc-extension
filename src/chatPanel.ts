@@ -462,6 +462,9 @@ class ChatPanel {
       case 'resumeQueue':
         this.prompts.resume();
         break;
+      case 'queueTogether':
+        this.prompts.setTogether(message.together);
+        break;
       case 'openSubagent':
         this.openSubagent(message.key);
         break;
