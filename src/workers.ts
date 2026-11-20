@@ -11,6 +11,7 @@ import type {
 import type { SubagentSettingsState, SubagentSummary } from 'codeflower-ui/protocol/subagents.ts';
 import type { WorkerUsage } from 'codeflower-ui/protocol/usage.ts';
 import type { AgentCommand } from 'codeflower-ui/protocol/commands.ts';
+import { jobActive, type BatchJob } from 'codeflower-ui/protocol/jobs.ts';
 import type { BrowserFrame, BrowserState } from 'codeflower-ui/protocol/browser.ts';
 import { parseWorkerAddress, type WorkerAddress } from 'codeflower-ui/client/address.ts';
 import {
@@ -68,6 +69,8 @@ export interface WorkerRouter {
   background(workerId: string, sessionKey: string, tasks: BackgroundTask[]): void;
   /** The commands a chat's agent runs changed: one started or ended, or a window watches it. */
   commands(workerId: string, sessionKey: string, commands: AgentCommand[]): void;
+  /** The project's batch jobs changed (codeflower-job): one was submitted, or changed state. */
+  jobs(workerId: string, jobs: BatchJob[]): void;
   config(workerId: string, sessionKey: string, options: SessionConfigOption[]): void;
   elicitUrl(workerId: string, request: UrlElicitation): Promise<'accept' | 'decline'>;
   elicitationComplete(workerId: string, elicitationId: string): void;
@@ -297,6 +300,14 @@ export class WorkerManager implements vscode.Disposable {
             queue: (key, queue) => this.router.queue(entry.id, key, queue),
             background: (key, tasks) => this.router.background(entry.id, key, tasks),
             commands: (key, commands) => this.router.commands(entry.id, key, commands),
+            jobs: (jobs) => {
+              this.router.jobs(entry.id, jobs);
+              // The tree counts the active ones.
+              if (entry.status?.jobs) {
+                entry.status.jobs.active = jobs.filter(jobActive).length;
+                this.changed.fire();
+              }
+            },
             config: (key, options) => this.router.config(entry.id, key, options),
             elicitUrl: (request) => this.router.elicitUrl(entry.id, request),
             elicitationComplete: (elicitationId) => this.router.elicitationComplete(entry.id, elicitationId),

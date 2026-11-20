@@ -324,7 +324,8 @@ export class WorkerTree implements vscode.TreeDataProvider<TreeNode> {
       : '';
     // A line without a fingerprint (an older image, or a worker serving its page): plain WebSocket.
     const unencrypted = !worker.address.fingerprint;
-    item.description = [worker.address.display, unencrypted ? 'unencrypted' : '', worker.status?.slurmJobId ? `job ${worker.status.slurmJobId}` : '', end]
+    const jobs = worker.status?.jobs?.active ? `${worker.status.jobs.active} batch job${worker.status.jobs.active === 1 ? '' : 's'}` : '';
+    item.description = [worker.address.display, unencrypted ? 'unencrypted' : '', worker.status?.slurmJobId ? `job ${worker.status.slurmJobId}` : '', end, jobs]
       .filter(Boolean)
       .join(' · ');
     item.tooltip = new vscode.MarkdownString(

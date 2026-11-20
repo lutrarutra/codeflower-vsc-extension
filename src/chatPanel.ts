@@ -19,6 +19,7 @@ import {
 import { ChatQueue } from 'codeflower-ui/client/chatQueue.ts';
 import type { ChatUsage } from 'codeflower-ui/protocol/usage.ts';
 import type { AgentCommand } from 'codeflower-ui/protocol/commands.ts';
+import { jobsOfChat, type BatchJob } from 'codeflower-ui/protocol/jobs.ts';
 import {
   subagentTitle,
   withSubagent,
@@ -504,6 +505,13 @@ class ChatPanel {
           this.reportError(error);
         }
         break;
+      case 'cancelJob':
+        try {
+          await this.workers.require(this.workerId).cancelJob(message.id);
+        } catch (error) {
+          this.reportError(error);
+        }
+        break;
       case 'subagentSettings':
         try {
           const connection = this.workers.require(this.workerId);
@@ -548,6 +556,8 @@ const FAVORITE_MODELS_KEY = 'codeflower.favoriteModels';
 
 export class ChatPanels {
   private readonly panels = new Map<string, ChatPanel>();
+  /** Each worker's batch jobs as it last said; each chat shows its own. */
+  private readonly jobsOf = new Map<string, BatchJob[]>();
   /** Chats open in the agent's own terminal UI (`codeflower attach`), by worker and key. */
   private readonly terminalsByWorker = new Map<string, Record<string, ChatTerminal>>();
   /** The terminal notice each panel shows, so it is posted once and cleared when the terminal goes. */
@@ -880,6 +890,7 @@ export class ChatPanels {
       this.noticeTerminal(panel);
       void this.loadSubagents(panel);
       void this.loadCommands(panel);
+      void this.loadJobs(panel);
     } catch (error) {
       panel.loaded(await connection.transcriptPage(key).catch(() => EMPTY_TRANSCRIPT));
       panel.reportError(error);
@@ -1053,6 +1064,21 @@ export class ChatPanels {
 
   commands(workerId: string, key: string, commands: AgentCommand[]): void {
     this.panels.get(this.id(workerId, key))?.setState({ commands });
+  }
+
+  /** A worker's batch jobs changed: each of its chats shows its own. */
+  jobs(workerId: string, jobs: BatchJob[]): void {
+    this.jobsOf.set(workerId, jobs);
+    for (const panel of this.panels.values()) {
+      if (panel.workerId === workerId) panel.setState({ jobs: jobsOfChat(jobs, panel.key) });
+    }
+  }
+
+  /** The worker's batch jobs, for a chat that attached. */
+  private async loadJobs(panel: ChatPanel): Promise<void> {
+    const connection = this.workers.get(panel.workerId)?.connection;
+    if (!connection?.jobsFeature) return;
+    this.jobs(panel.workerId, await connection.jobs());
   }
 
   /** The commands a chat's agent runs, for its strip. */
