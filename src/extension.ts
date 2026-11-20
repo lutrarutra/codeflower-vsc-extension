@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { parseWorkerAddress } from 'codeflower-ui/client/address.ts';
+import { isWholeLine, movedAddress } from './workerAddress.ts';
 import { workerLinks } from './terminalLinks.ts';
 import { hostPath } from 'codeflower-ui/client/hostPaths.ts';
 import { pastedLine } from './pastedLine.ts';
@@ -235,6 +236,45 @@ export function activate(context: vscode.ExtensionContext): void {
       'codeflower.removeWorker',
       guarded((node: TreeNode) => workers.remove(node.workerId))
     ),
+    // Its sandbox started again (`--continue`) on another node or port: same chats, new host:port.
+    vscode.commands.registerCommand(
+      'codeflower.editWorkerAddress',
+      guarded(async (node: TreeNode) => {
+        const worker = workers.get(node.workerId);
+        if (!worker) return;
+        const current = worker.address;
+        const newAddress = (value: string) => {
+          const line = pastedLine(value);
+          return isWholeLine(line) ? parseWorkerAddress(line) : movedAddress(current, line);
+        };
+        const text = await vscode.window.showInputBox({
+          title: 'Change the sandbox’s address',
+          prompt: 'The new host:port (or only the port). A new sandbox, not one started again with --continue: paste its whole codeflower://… line',
+          value: current.display,
+          valueSelection: [current.display.lastIndexOf(':') + 1, current.display.length],
+          ignoreFocusOut: true,
+          validateInput: (value) => {
+            try {
+              const moved = newAddress(value);
+              const other = [...workers.workers.values()].find((entry) => entry.id !== worker.id && entry.address.display === moved.display);
+              return other ? `Another sandbox in the list is at ${moved.display}` : undefined;
+            } catch (error) {
+              return message(error);
+            }
+          }
+        });
+        if (text === undefined) return;
+        const moved = newAddress(text);
+        if (moved.url === current.url && moved.token === current.token && moved.fingerprint === current.fingerprint) return;
+        try {
+          await workers.move(worker.id, moved);
+        } catch (error) {
+          void vscode.window.showWarningMessage(
+            `Saved the sandbox at ${moved.display}, but it does not answer there yet (${message(error)}). code flower keeps trying.`
+          );
+        }
+      })
+    ),
     vscode.commands.registerCommand(
       'codeflower.reconnectWorker',
       guarded((node: TreeNode) => workers.reconnect(node.workerId))
@@ -267,7 +307,11 @@ export function activate(context: vscode.ExtensionContext): void {
               ? connected[0]!.id
               : (
                   await vscode.window.showQuickPick(
-                    connected.map((worker) => ({ label: sandboxLabel(worker.status?.stateDirectory, worker.id), description: worker.id, id: worker.id })),
+                    connected.map((worker) => ({
+                      label: sandboxLabel(worker.status?.stateDirectory, worker.address.display),
+                      description: worker.address.display,
+                      id: worker.id
+                    })),
                     { title: 'Open a shell in' }
                   )
                 )?.id;

@@ -123,6 +123,12 @@
         "icon": "$(debug-restart)"
       },
       {
+        "command": "codeflower.editWorkerAddress",
+        "title": "Change address (host:port)…",
+        "category": "code flower",
+        "icon": "$(edit)"
+      },
+      {
         "command": "codeflower.removeWorker",
         "title": "Remove worker",
         "category": "code flower",
@@ -237,6 +243,16 @@
           "group": "worker@3"
         },
         {
+          "command": "codeflower.editWorkerAddress",
+          "when": "view == codeflower.workers && viewItem =~ /^worker/",
+          "group": "worker@4"
+        },
+        {
+          "command": "codeflower.editWorkerAddress",
+          "when": "view == codeflower.workers && viewItem == worker.disconnected",
+          "group": "inline@1"
+        },
+        {
           "command": "codeflower.renameSession",
           "when": "view == codeflower.workers && viewItem == session",
           "group": "inline@1"
@@ -276,6 +292,10 @@
         },
         {
           "command": "codeflower.removeWorker",
+          "when": "false"
+        },
+        {
+          "command": "codeflower.editWorkerAddress",
           "when": "false"
         },
         {

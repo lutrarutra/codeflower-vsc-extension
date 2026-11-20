@@ -25,6 +25,7 @@ import {
   type WorkerStatus,
   type WrapUpNotice
 } from 'codeflower-ui/client/workerConnection.ts';
+import { parseSavedWorkers, serializeSavedWorkers } from './workerAddress.ts';
 import { wrapUpMessage } from './wrapUp.ts';
 import { wsTransport } from './wsTransport.ts';
 
@@ -32,7 +33,11 @@ const WORKERS_SECRET = 'codeflower.workers';
 const POLL_MS = 10_000;
 
 export interface WorkerEntry {
-  /** host:port; unique per worker. */
+  /**
+   * Unique per worker, and kept for as long as it is listed: its host:port
+   * when it was added. Its address may have moved since (`move`), so show
+   * `address.display`, not this.
+   */
   id: string;
   address: WorkerAddress;
   state: 'connecting' | 'connected' | 'disconnected';
@@ -89,12 +94,6 @@ export interface WorkerRouter {
   agentDisconnected(workerId: string, agent: AgentName, code: number): void;
 }
 
-function serialize(address: WorkerAddress): string {
-  // The fingerprint stays with the line: a saved worker reconnects over TLS, pinned.
-  const fingerprint = address.fingerprint ? `&fp=${address.fingerprint}` : '';
-  return `codeflower://${address.display}?token=${encodeURIComponent(address.token)}${fingerprint}`;
-}
-
 export class WorkerManager implements vscode.Disposable {
   readonly workers = new Map<string, WorkerEntry>();
   private readonly changed = new vscode.EventEmitter<void>();
@@ -128,16 +127,11 @@ export class WorkerManager implements vscode.Disposable {
 
   /** Reconnects to the workers of the last VS Code session. */
   async restore(): Promise<void> {
-    let saved: string[] = [];
-    try {
-      saved = JSON.parse((await this.context.secrets.get(WORKERS_SECRET)) ?? '[]') as string[];
-    } catch {
-      saved = [];
-    }
+    const saved = parseSavedWorkers(await this.context.secrets.get(WORKERS_SECRET));
     await Promise.all(
-      saved.map(async (text) => {
+      saved.map(async ({ id, line }) => {
         try {
-          await this.add(text, false);
+          await this.add(line, false, id);
         } catch {
           // Unreachable workers stay listed as disconnected until removed.
         }
@@ -145,11 +139,20 @@ export class WorkerManager implements vscode.Disposable {
     );
   }
 
-  async add(text: string, persist = true): Promise<WorkerEntry> {
+  /** `id`: the one it was saved with, if not its address; else its address, or the listed worker's there. */
+  async add(text: string, persist = true, id?: string): Promise<WorkerEntry> {
     const address = parseWorkerAddress(text);
-    const existing = this.workers.get(address.display);
+    const existing = id ? this.workers.get(id) : this.at(address.display);
     existing?.connection?.close();
-    const entry: WorkerEntry = { id: address.display, address, state: 'connecting', sessions: [], agents: [], usage: {}, subagentSettings: {} };
+    const entry: WorkerEntry = {
+      id: id ?? existing?.id ?? this.freeId(address.display),
+      address,
+      state: 'connecting',
+      sessions: [],
+      agents: [],
+      usage: {},
+      subagentSettings: {}
+    };
     this.workers.set(entry.id, entry);
     this.changed.fire();
     if (persist) await this.save();
@@ -164,6 +167,43 @@ export class WorkerManager implements vscode.Disposable {
     entry.connection?.close();
     await this.save();
     this.changed.fire();
+  }
+
+  /**
+   * Points a listed worker at a new address, e.g. its sandbox started again
+   * (`--continue`) on another node or port. It keeps its id, so its open
+   * chats and tabs connect to it there. Throws if it does not answer there
+   * (yet); it stays saved at the new address and is tried again.
+   */
+  async move(id: string, address: WorkerAddress): Promise<void> {
+    const entry = this.workers.get(id);
+    if (!entry) throw new Error('The worker is no longer listed');
+    const other = this.at(address.display);
+    if (other && other !== entry) throw new Error(`Another sandbox in the list is at ${address.display}`);
+    entry.address = address;
+    entry.takenOver = false;
+    const previous = entry.connection;
+    entry.connection = undefined;
+    previous?.close();
+    if (previous) {
+      // Its open chats learn it went, as they would if it had stopped.
+      entry.usage = {};
+      this.router.disconnected(entry.id, 1000);
+    }
+    await this.save();
+    await this.connect(entry);
+  }
+
+  /** The listed worker at an address. */
+  private at(display: string): WorkerEntry | undefined {
+    return [...this.workers.values()].find((entry) => entry.address.display === display);
+  }
+
+  /** `display`, or, when a moved worker kept that id, the first `display#n` not taken. */
+  private freeId(display: string): string {
+    let id = display;
+    for (let n = 2; this.workers.has(id); n++) id = `${display}#${n}`;
+    return id;
   }
 
   /** Connects again, e.g. to take the worker back from another window. */
@@ -234,10 +274,7 @@ export class WorkerManager implements vscode.Disposable {
   }
 
   private async save(): Promise<void> {
-    await this.context.secrets.store(
-      WORKERS_SECRET,
-      JSON.stringify([...this.workers.values()].map((entry) => serialize(entry.address)))
-    );
+    await this.context.secrets.store(WORKERS_SECRET, serializeSavedWorkers([...this.workers.values()]));
   }
 
   private async connect(entry: WorkerEntry, retry = false): Promise<void> {
@@ -245,10 +282,13 @@ export class WorkerManager implements vscode.Disposable {
     entry.error = undefined;
     this.changed.fire();
     const deadline = Date.now() + (retry ? 5_000 : 0);
+    // A try at an address the worker has since moved from (`move`) changes nothing.
+    const address = entry.address;
+    const moved = () => entry.address !== address;
     for (;;) {
       try {
         const connection = await WorkerConnection.connect(
-          (agent) => wsTransport(entry.address, agent),
+          (agent) => wsTransport(address, agent),
           {
             entry: (key, item) => this.router.entry(entry.id, key, item),
             permission: (key, request) => this.router.permission(entry.id, key, request),
@@ -306,6 +346,10 @@ export class WorkerManager implements vscode.Disposable {
           connection.close();
           throw error;
         }
+        if (moved()) {
+          connection.close();
+          return;
+        }
         entry.connection = connection;
         entry.actions = actions;
         entry.agents = connection.agents;
@@ -326,6 +370,7 @@ export class WorkerManager implements vscode.Disposable {
         await this.router.connected(entry.id);
         return;
       } catch (error) {
+        if (moved()) return;
         // Right after a restart of the agent, the worker may still be starting a fresh one.
         if (Date.now() < deadline) {
           await new Promise((resolve) => setTimeout(resolve, 200));

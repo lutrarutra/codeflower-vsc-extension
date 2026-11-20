@@ -708,7 +708,7 @@ export class ChatPanels {
   /** What a chat's header says of its agent, once the worker told its name. */
   private header(workerId: string, key: string): Pick<ChatState, 'subtitle' | 'agent'> {
     const agent = this.presentation(workerId, key);
-    return { subtitle: `${agent.name ?? 'Agent'} · ${workerId}`, agent };
+    return { subtitle: `${agent.name ?? 'Agent'} · ${this.workers.get(workerId)?.address.display ?? workerId}`, agent };
   }
 
   private create(
@@ -729,7 +729,7 @@ export class ChatPanels {
       key,
       title,
       actions: worker?.actions,
-      subtitle: `${agent.name ?? 'Agent'} · ${workerId}`,
+      subtitle: `${agent.name ?? 'Agent'} · ${worker?.address.display ?? workerId}`,
       agent,
       onDispose: () => {
         this.panels.delete(this.id(workerId, panel.key));

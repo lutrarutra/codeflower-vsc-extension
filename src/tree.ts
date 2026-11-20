@@ -324,12 +324,12 @@ export class WorkerTree implements vscode.TreeDataProvider<TreeNode> {
       : '';
     // A line without a fingerprint (an older image, or a worker serving its page): plain WebSocket.
     const unencrypted = !worker.address.fingerprint;
-    item.description = [worker.id, unencrypted ? 'unencrypted' : '', worker.status?.slurmJobId ? `job ${worker.status.slurmJobId}` : '', end]
+    item.description = [worker.address.display, unencrypted ? 'unencrypted' : '', worker.status?.slurmJobId ? `job ${worker.status.slurmJobId}` : '', end]
       .filter(Boolean)
       .join(' · ');
     item.tooltip = new vscode.MarkdownString(
       [
-        `**${label}** on \`${worker.id}\``,
+        `**${label}** on \`${worker.address.display}\``,
         worker.status?.stateDirectory ? `Project: \`${worker.status.stateDirectory}\`` : '',
         unencrypted
           ? '$(warning) Unencrypted connection: its line has no certificate fingerprint (fp=), so chats and its token cross the network in the clear. Start it with a current code flower, without --server.'
