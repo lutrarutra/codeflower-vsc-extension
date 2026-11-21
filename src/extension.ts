@@ -72,7 +72,9 @@ export function activate(context: vscode.ExtensionContext): void {
       panels?.disconnected(workerId, code);
       browsers?.disconnected(workerId);
     },
-    agentDisconnected: (workerId, agent, code) => panels?.agentDisconnected(workerId, agent, code)
+    agentDisconnected: (workerId, agent, code) => panels?.agentDisconnected(workerId, agent, code),
+    released: (workerId, key) => panels?.released(workerId, key),
+    requested: (workerId, key) => panels?.requested(workerId, key)
   });
   setIconDirectory(context.globalStorageUri);
   signIn = new SignIn(workers);

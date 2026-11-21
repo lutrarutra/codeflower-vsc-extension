@@ -95,6 +95,10 @@ export interface WorkerRouter {
   disconnected(workerId: string, code: number): void;
   /** An agent's connection ended, e.g. it restarted (1011). */
   agentDisconnected(workerId: string, agent: AgentName, code: number): void;
+  /** The worker let go of a chat open here: another worker took it over. */
+  released(workerId: string, key: string): void;
+  /** Another worker asked for a chat open here; it goes there once its turn ended. */
+  requested(workerId: string, key: string): void;
 }
 
 export class WorkerManager implements vscode.Disposable {
@@ -332,6 +336,8 @@ export class WorkerManager implements vscode.Disposable {
               entry.subagentSettings[agent] = state;
               this.router.subagentSettings(entry.id, agent);
             },
+            released: (key) => this.router.released(entry.id, key),
+            requested: (key) => this.router.requested(entry.id, key),
             agentClosed: (agent, _reason, code) => {
               if (entry.connection !== connection) return;
               delete entry.usage[agent];

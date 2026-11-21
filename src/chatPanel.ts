@@ -9,6 +9,8 @@ import {
   type ChatAction,
   type ChatState,
   type HostMessage,
+  NOTICE_ACTION_LABELS,
+  type NoticeAction,
   type PendingPermission,
   type PendingQuestion,
   type SandboxChat,
@@ -33,6 +35,7 @@ import {
   type ChatTerminal,
   isAuthRequired,
   isConnectionClosed,
+  METHOD_NOT_FOUND,
   pageUpTo,
   RpcError,
   TAKEN_OVER,
@@ -44,6 +47,11 @@ import { createTabPanel, postTabState, webviewHtml } from './webviewHtml.ts';
 import type { WorkerManager } from './workers.ts';
 
 const LEASE_CONFLICT = -32010;
+// A chat open on another worker tries to open here again this often, so it does once that worker lets go of it;
+// after Take over, more often, for as long as the other worker heeds the request.
+const LEASE_RETRY_MS = 15_000;
+const TAKE_OVER_RETRY_MS = 2_000;
+const TAKE_OVER_MS = 10 * 60_000;
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -87,6 +95,8 @@ class ChatPanel {
   private readonly onConfigChosen: (configId: string, value: string | boolean) => void;
   private readonly onFoldSteps: (fold: boolean) => void;
   private readonly onFavoriteModel: (value: string, pinned: boolean) => void;
+  private readonly onTakeOver: () => void;
+  private readonly onLeaseConflict: () => void;
   /** When the user last wrote here or looked at the tab; feedback from previews goes to the latest. */
   lastUsed = Date.now();
   /** The user's `!commands` running now; files they show belong to this chat. */
@@ -138,6 +148,10 @@ class ChatPanel {
     onOpenShell: () => void;
     /** Shows the chat's browser beside it. */
     onOpenBrowser: () => void;
+    /** The chat is open on another worker: ask it to let go (Take over). */
+    onTakeOver: () => void;
+    /** Opening the chat found it open on another worker. */
+    onLeaseConflict: () => void;
     /** The chat's browser, if it runs (its header's button). */
     browser?: ChatState['browser'];
     subagent?: ChatState['subagent'];
@@ -176,6 +190,8 @@ class ChatPanel {
     this.onConfigChosen = options.onConfigChosen;
     this.onFoldSteps = options.onFoldSteps;
     this.onFavoriteModel = options.onFavoriteModel;
+    this.onTakeOver = options.onTakeOver;
+    this.onLeaseConflict = options.onLeaseConflict;
     this.showStatus();
     this.panel.webview.html = webviewHtml(this.panel.webview, this.extensionUri, 'chat', this.tab);
     this.panel.webview.onDidReceiveMessage((message: WebviewMessage) => void this.handle(message));
@@ -213,6 +229,11 @@ class ChatPanel {
   }
 
   /** The subagent this chat shows, when it is a subagent's. */
+  /** The chat is attached here and takes prompts. */
+  get live(): boolean {
+    return this.state.live;
+  }
+
   get subagent(): ChatState['subagent'] {
     return this.state.subagent;
   }
@@ -343,20 +364,17 @@ class ChatPanel {
     this.onStatus?.();
   }
 
-  notice(level: 'info' | 'error', message: string, signIn = false): void {
-    this.post({
-      type: 'notice',
-      level,
-      message,
-      ...(signIn ? { action: { id: 'signIn' as const, label: 'Sign in' } } : {})
-    });
+  /** `action`: the notice's button (`true`: Sign in). */
+  notice(level: 'info' | 'error', message: string, action: NoticeAction | boolean = false): void {
+    const id = action === true ? 'signIn' : action || undefined;
+    this.post({ type: 'notice', level, message, ...(id ? { action: { id, label: NOTICE_ACTION_LABELS[id] } } : {}) });
   }
 
   reportError(error: unknown): void {
     if (isAuthRequired(error)) {
       this.notice('error', 'The agent is not signed in for this project.', true);
     } else if (error instanceof RpcError && error.code === LEASE_CONFLICT) {
-      this.notice('info', 'This session is open on another worker; it is read-only here.');
+      this.onLeaseConflict();
     } else {
       this.notice('error', describe(error));
     }
@@ -458,6 +476,7 @@ class ChatPanel {
         break;
       case 'action':
         if (message.id === 'signIn') await this.signIn(this.workerId, agentOfKey(this.key));
+        else if (message.id === 'takeOver') this.onTakeOver();
         else this.runAction(message.id);
         break;
       case 'removeQueued':
@@ -556,6 +575,10 @@ const FAVORITE_MODELS_KEY = 'codeflower.favoriteModels';
 
 export class ChatPanels {
   private readonly panels = new Map<string, ChatPanel>();
+  /** Chats open on another worker, read-only here, and their next try to open here (retryLease). */
+  private readonly leaseRetries = new Map<ChatPanel, ReturnType<typeof setTimeout>>();
+  /** Chats this window asked the other worker for (Take over), until when the request holds. */
+  private readonly takingOver = new Map<ChatPanel, number>();
   /** Each worker's batch jobs as it last said; each chat shows its own. */
   private readonly jobsOf = new Map<string, BatchJob[]>();
   /** Chats open in the agent's own terminal UI (`codeflower attach`), by worker and key. */
@@ -744,8 +767,11 @@ export class ChatPanels {
       onDispose: () => {
         this.panels.delete(this.id(workerId, panel.key));
         this.terminalNotices.delete(panel);
+        this.stopLeaseRetry(panel);
         // A subagent's updates stop coming once no chat of it is open.
         if (panel.subagent) void this.workers.get(workerId)?.connection?.closeSubagent(panel.key).catch(() => undefined);
+        // The worker lets go of a chat once no window has it open and it is idle, so another worker can open it.
+        else void this.workers.get(workerId)?.connection?.closeSession(panel.key).catch(() => undefined);
         this.statusChanged.fire();
       },
       onStatus: () => this.statusChanged.fire(),
@@ -761,6 +787,8 @@ export class ChatPanels {
       onOpenCommand: (command) => this.openCommand(workerId, command, agent.name ?? agentOfKey(panel.key)),
       onOpenShell: () => this.openShell(workerId, workerId),
       onOpenBrowser: () => this.openBrowser(workerId, panel.key),
+      onTakeOver: () => void this.takeOver(panel),
+      onLeaseConflict: () => this.leaseConflict(panel),
       browser: this.browserOf(workerId, key),
       ...(subagent ? { subagent: this.subagentState(workerId, subagent) } : {})
     });
@@ -870,6 +898,8 @@ export class ChatPanels {
     panel.hold();
     try {
       const attached = await connection.resumeSession(session.harness, session.nativeSessionId, session.cwd);
+      // It was open on another worker, which let go of it.
+      if (this.stopLeaseRetry(panel)) panel.notice('info', 'The other worker let go of this chat: it is open here now.');
       // Updates after the attach came live; the transcript has them too.
       panel.loaded(pageUpTo(await connection.transcriptPage(key), attached.transcriptEntries));
       panel.post({ type: 'config', options: connection.config(key) });
@@ -1095,6 +1125,82 @@ export class ChatPanels {
 
   close(workerId: string, key: string): void {
     this.panels.get(this.id(workerId, key))?.panel.dispose();
+  }
+
+  // ---- chats open on another worker ----
+
+  /** Opening the chat found it open on another worker: read-only here, and it tries again now and then. */
+  private leaseConflict(panel: ChatPanel): void {
+    // After Take over, the notice says the request is on its way.
+    if (!this.takingOver.has(panel)) {
+      panel.notice(
+        'info',
+        'This chat is open on another worker; it is read-only here. It opens here once that worker lets go of it: Take over asks it to, after its turn.',
+        'takeOver'
+      );
+    }
+    this.retryLease(panel);
+  }
+
+  /** Asks the worker that has the chat to let go of it; the chat opens here once it did. */
+  private async takeOver(panel: ChatPanel): Promise<void> {
+    try {
+      const result = await this.workers.require(panel.workerId).takeOver(panel.key);
+      if (result.state === 'free') {
+        await this.attach(panel);
+        return;
+      }
+      this.takingOver.set(panel, Date.now() + TAKE_OVER_MS);
+      panel.notice('info', 'Asked the other worker for this chat. It lets go once the chat is idle, after its turn; the chat opens here then.');
+      this.retryLease(panel);
+    } catch (error) {
+      if (error instanceof RpcError && error.code === METHOD_NOT_FOUND) {
+        panel.notice('error', 'This worker cannot take chats over: update it, or close the chat on the other worker.');
+      } else panel.reportError(error);
+    }
+  }
+
+  /** The chat tries to open here again in a while: after Take over soon, else now and then. */
+  private retryLease(panel: ChatPanel): void {
+    clearTimeout(this.leaseRetries.get(panel));
+    const until = this.takingOver.get(panel);
+    if (until !== undefined && Date.now() > until) this.takingOver.delete(panel);
+    const wait = this.takingOver.has(panel) ? TAKE_OVER_RETRY_MS : LEASE_RETRY_MS;
+    this.leaseRetries.set(
+      panel,
+      setTimeout(() => {
+        const connected = this.workers.get(panel.workerId)?.connection;
+        if (this.panels.get(this.id(panel.workerId, panel.key)) !== panel || panel.live || !connected) {
+          this.stopLeaseRetry(panel);
+          return;
+        }
+        void this.attach(panel).catch((error) => panel.reportError(error));
+      }, wait)
+    );
+  }
+
+  /** Whether the chat was waiting for another worker to let go of it. */
+  private stopLeaseRetry(panel: ChatPanel): boolean {
+    const waiting = this.leaseRetries.has(panel);
+    clearTimeout(this.leaseRetries.get(panel));
+    this.leaseRetries.delete(panel);
+    this.takingOver.delete(panel);
+    return waiting;
+  }
+
+  /** Another worker took the chat over: read-only here, until it lets go of it again or Take over. */
+  released(workerId: string, key: string): void {
+    const panel = this.panels.get(this.id(workerId, key));
+    if (!panel) return;
+    panel.setState({ live: false, busy: false, background: [] });
+    panel.post({ type: 'config', options: [] });
+    panel.notice('info', 'Another worker took this chat over; it is read-only here. Take over to move it back.', 'takeOver');
+    this.retryLease(panel);
+  }
+
+  /** Another worker asked for the chat: it goes there once its turn ended. */
+  requested(workerId: string, key: string): void {
+    this.panels.get(this.id(workerId, key))?.notice('info', 'Another worker asked for this chat: it moves there once this turn ends.');
   }
 
   /**
