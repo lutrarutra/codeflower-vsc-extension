@@ -92,7 +92,6 @@ class ChatPanel {
   private status: SessionStatus | undefined;
   private readonly onStatus: () => void;
   private readonly onOpenFile: (path: string) => void;
-  private readonly onConfigChosen: (configId: string, value: string | boolean) => void;
   private readonly onFoldSteps: (fold: boolean) => void;
   private readonly onFavoriteModel: (value: string, pinned: boolean) => void;
   private readonly onTakeOver: () => void;
@@ -129,7 +128,6 @@ class ChatPanel {
     onDispose: () => void;
     onStatus: () => void;
     onOpenFile: (path: string) => void;
-    onConfigChosen: (configId: string, value: string | boolean) => void;
     /** Whether chats fold each turn's steps, and the user's choice of it (for every chat). */
     foldSteps: boolean;
     onFoldSteps: (fold: boolean) => void;
@@ -187,7 +185,6 @@ class ChatPanel {
     this.extensionUri = options.extensionUri;
     this.onStatus = options.onStatus;
     this.onOpenFile = options.onOpenFile;
-    this.onConfigChosen = options.onConfigChosen;
     this.onFoldSteps = options.onFoldSteps;
     this.onFavoriteModel = options.onFavoriteModel;
     this.onTakeOver = options.onTakeOver;
@@ -451,7 +448,6 @@ class ChatPanel {
       case 'setConfig':
         try {
           await this.workers.require(this.workerId).setConfigOption(this.key, message.configId, message.value);
-          this.onConfigChosen(message.configId, message.value);
         } catch (error) {
           this.reportError(error);
           // Show the agent's actual settings again.
@@ -604,7 +600,7 @@ export class ChatPanels {
   /** What a chat's header shows of its browser; set once the browser panels exist. */
   browserOf: (workerId: string, key: string) => ChatState['browser'] = () => undefined;
 
-  /** Remembers the user's last mode per agent for new sessions, and whether chats fold their steps. */
+  /** Remembers the user's pinned models, and whether chats fold their steps. A new chat's settings come from the worker. */
   private readonly memento: vscode.Memento;
 
   constructor(
@@ -642,31 +638,6 @@ export class ChatPanels {
     void this.memento.update(FAVORITE_MODELS_KEY, { ...all, [agent]: next });
     for (const panel of this.panels.values()) {
       if (agentOfKey(panel.key) === agent) panel.setState({ favoriteModels: next });
-    }
-  }
-
-  /** Where the mode the user chose last for the chat's agent is kept. */
-  private modeKey(key: string): string {
-    return `codeflower.mode.${agentOfKey(key)}`;
-  }
-
-  private rememberConfig(workerId: string, key: string, configId: string, value: string | boolean): void {
-    const option = this.workers.get(workerId)?.connection?.config(key).find((candidate) => candidate.id === configId);
-    if (option?.category === 'mode') void this.memento.update(this.modeKey(key), value);
-  }
-
-  /** New sessions start in the mode the user chose last for this agent, e.g. one that asks less. */
-  private async applyRememberedMode(workerId: string, key: string): Promise<void> {
-    const remembered = this.memento.get<string>(this.modeKey(key));
-    const connection = this.workers.get(workerId)?.connection;
-    const mode = connection?.config(key).find((option) => option.category === 'mode');
-    if (!connection || !remembered || mode?.type !== 'select' || mode.currentValue === remembered) return;
-    const values = mode.options.flatMap((entry) => ('options' in entry ? entry.options : [entry])).map((choice) => choice.value);
-    if (!values.includes(remembered)) return;
-    try {
-      await connection.setConfigOption(key, mode.id, remembered);
-    } catch {
-      // The agent keeps its own default.
     }
   }
 
@@ -776,7 +747,6 @@ export class ChatPanels {
       },
       onStatus: () => this.statusChanged.fire(),
       onOpenFile: (path) => this.openFile(workerId, panel.key, path),
-      onConfigChosen: (configId, value) => this.rememberConfig(workerId, panel.key, configId, value),
       foldSteps: this.foldSteps,
       onFoldSteps: (fold) => this.setFoldSteps(fold),
       favoriteModels: this.favoriteModels(agent.id),
@@ -845,7 +815,6 @@ export class ChatPanels {
     } else {
       panel.post({ type: 'transcript', entries: [] });
     }
-    await this.applyRememberedMode(workerId, key);
     panel.post({ type: 'config', options: connection.config(key) });
     panel.setState({ live: true, steer: connection.canSteer(key), shells: connection.shellTerminals });
     const notice = connection.mcpNotice(key);
