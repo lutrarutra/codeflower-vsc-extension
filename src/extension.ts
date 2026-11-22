@@ -40,7 +40,11 @@ export function activate(context: vscode.ExtensionContext): void {
     queue: (workerId, key, queue) => panels?.queue(workerId, key, queue),
     background: (workerId, key, tasks) => panels?.background(workerId, key, tasks),
     commands: (workerId, key, commands) => panels?.commands(workerId, key, commands),
-    jobs: (workerId, jobs) => panels?.jobs(workerId, jobs),
+    jobs: (workerId, jobs) => {
+      panels?.jobs(workerId, jobs);
+      // A tab with a job's output says whether more is coming.
+      previews?.jobsChanged(workerId);
+    },
     config: (workerId, key, options) => panels?.config(workerId, key, options),
     elicitUrl: async (_workerId, request) => (signIn ? signIn.elicitUrl(request) : 'decline'),
     elicitationComplete: () => {},

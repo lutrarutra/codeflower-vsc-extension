@@ -13,6 +13,7 @@ import * as vscode from 'vscode';
 import type { PreviewHostMessage, PreviewState, PreviewWebviewMessage, SandboxFile } from 'codeflower-ui/protocol/messages.ts';
 import { feedbackAnnotations, feedbackFigure, feedbackText } from 'codeflower-ui/chat/lib/feedback.ts';
 import { isBesideReport, isStorytellerReport } from 'codeflower-ui/chat/lib/report.ts';
+import { jobActive, jobOfFile } from 'codeflower-ui/protocol/jobs.ts';
 import type { ChatPanels } from './chatPanel.ts';
 import { isFileConflict } from 'codeflower-ui/client/codeflower.ts';
 import { WORKSPACE, type ShowRequest } from 'codeflower-ui/client/workerConnection.ts';
@@ -132,6 +133,7 @@ class PreviewPanel {
   /** Posts what the tab shows now. */
   postState(): void {
     const chat = this.chatKey ? this.owner.chats.chat(this.workerId, this.chatKey) : null;
+    const job = jobOfFile(this.owner.chats.jobsFor(this.workerId), this.file.path);
     const state: PreviewState = {
       file: this.file,
       data: this.data,
@@ -140,7 +142,8 @@ class PreviewPanel {
       message: this.messageFor === this.file.mtimeMs ? this.message : null,
       chat: chat ?? (this.chatKey ? { title: 'the chat', busy: false } : null),
       live: !!this.owner.workers.get(this.workerId)?.connection?.connected,
-      interactive: this.interactive
+      interactive: this.interactive,
+      ...(job ? { job } : {})
     };
     this.post({ type: 'preview', state });
   }
@@ -419,10 +422,23 @@ export class PreviewPanels {
     }
   }
 
+  /** A worker's batch jobs changed: its tabs with a job's output say how the job is. */
+  jobsChanged(workerId: string): void {
+    for (const panel of this.panels.values()) if (panel.workerId === workerId) panel.postState();
+  }
+
   /** A path clicked in a chat or a report. */
   async openPath(workerId: string, path: string, chatKey: string | undefined): Promise<void> {
     try {
-      const file = await this.workers.require(workerId).statFile(path);
+      const file = await this.workers
+        .require(workerId)
+        .statFile(path)
+        .catch((error: unknown) => {
+          // A queued job's output is not there yet: its tab waits for it.
+          const job = jobOfFile(this.chats.jobsFor(workerId), path);
+          if (!job || !jobActive(job)) throw error;
+          return { path, size: 0, mtimeMs: 0, mimeType: 'text/plain' };
+        });
       this.open(workerId, file, { chatKey });
     } catch (error) {
       void vscode.window.showErrorMessage(`Cannot show ${path}: ${describe(error)}`);

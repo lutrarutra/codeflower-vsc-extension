@@ -1104,6 +1104,11 @@ export class ChatPanels {
     }
   }
 
+  /** A worker's batch jobs as it last said, e.g. for a tab that shows one's output. */
+  jobsFor(workerId: string): BatchJob[] {
+    return this.jobsOf.get(workerId) ?? [];
+  }
+
   /** The worker's batch jobs, for a chat that attached. */
   private async loadJobs(panel: ChatPanel): Promise<void> {
     const connection = this.workers.get(panel.workerId)?.connection;
