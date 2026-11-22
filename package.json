@@ -333,7 +333,7 @@
     "test": "node --test \"test/**/*.test.ts\""
   },
   "dependencies": {
-    "codeflower-ui": "github:lutrarutra/codeflower-ui#v0.41.0",
+    "codeflower-ui": "github:lutrarutra/codeflower-ui#v0.42.0",
     "ws": "^8.18.3"
   },
   "devDependencies": {
