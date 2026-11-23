@@ -85,6 +85,7 @@ class ChatPanel {
   private readonly openSubagent: (key: string) => void;
   private readonly listChats: () => void;
   private readonly openChat: (key: string) => void;
+  private readonly newChat: () => void;
   private readonly openCommand: (command: AgentCommand) => void;
   private readonly openShell: () => void;
   private readonly openBrowser: () => void;
@@ -140,6 +141,8 @@ class ChatPanel {
     onListChats: () => void;
     /** Shows another chat of the sandbox: its tab if open, else a new one. */
     onOpenChat: (key: string) => void;
+    /** Starts a new chat in the sandbox with this chat's agent, in a new tab. */
+    onNewChat: () => void;
     /** Shows a command the chat's agent runs, read-only. */
     onOpenCommand: (command: AgentCommand) => void;
     /** Opens a shell in the chat's sandbox, in VS Code's terminal panel. */
@@ -174,6 +177,7 @@ class ChatPanel {
     this.openSubagent = options.onOpenSubagent;
     this.listChats = options.onListChats;
     this.openChat = options.onOpenChat;
+    this.newChat = options.onNewChat;
     this.openCommand = options.onOpenCommand;
     this.openShell = options.onOpenShell;
     this.openBrowser = options.onOpenBrowser;
@@ -502,6 +506,9 @@ class ChatPanel {
       case 'openChat':
         this.openChat(message.key);
         break;
+      case 'newChat':
+        this.newChat();
+        break;
       case 'openShell':
         this.openShell();
         break;
@@ -754,6 +761,7 @@ export class ChatPanels {
       onOpenSubagent: (target) => void this.open(workerId, target).catch((error) => panel.reportError(error)),
       onListChats: () => void this.listChats(workerId, panel),
       onOpenChat: (target) => void this.open(workerId, target).catch((error) => panel.reportError(error)),
+      onNewChat: () => void this.newSession(workerId, agentOfKey(panel.key)).catch((error) => panel.reportError(error)),
       onOpenCommand: (command) => this.openCommand(workerId, command, agent.name ?? agentOfKey(panel.key)),
       onOpenShell: () => this.openShell(workerId, workerId),
       onOpenBrowser: () => this.openBrowser(workerId, panel.key),
