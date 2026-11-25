@@ -354,7 +354,7 @@
     "test": "node --test \"test/**/*.test.ts\""
   },
   "dependencies": {
-    "codeflower-ui": "github:lutrarutra/codeflower-ui#v0.45.0",
+    "codeflower-ui": "github:lutrarutra/codeflower-ui#v0.46.0",
     "ws": "^8.18.3"
   },
   "devDependencies": {
