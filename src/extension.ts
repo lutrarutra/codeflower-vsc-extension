@@ -29,6 +29,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // which are created after it; the late-bound references close that loop.
   let panels: ChatPanels | undefined;
   let previews: PreviewPanels | undefined;
+  // Set once the chats exist; an agent may ask for the map (codeflower-roots open) only after.
+  let rootsPanels: RootsPanels | undefined;
   let signIn: SignIn | undefined;
   let commandTerminals: CommandTerminals | undefined;
   let shellTerminals: ShellTerminals | undefined;
@@ -50,6 +52,7 @@ export function activate(context: vscode.ExtensionContext): void {
     elicitUrl: async (_workerId, request) => (signIn ? signIn.elicitUrl(request) : 'decline'),
     elicitationComplete: () => {},
     show: (workerId, request) => previews?.show(workerId, request),
+    roots: (workerId, idea) => rootsPanels?.open(workerId, idea),
     terminals: (workerId, terminals) => panels?.terminals(workerId, terminals),
     // A command watched here, a shell of the user's, else a sign-in.
     terminalOutput: (terminalId, data, replayed) =>
@@ -125,6 +128,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const tree = new WorkerTree(workers, panels);
   const plugins = new PluginsPanels(context.extensionUri, workers);
   const roots = new RootsPanels(context.extensionUri, workers, panels!);
+  rootsPanels = roots;
   roots.openFile = (workerId, path) => void previews!.openPath(workerId, path, undefined);
   roots.newChat = (workerId, draft) =>
     void newSession({ kind: 'worker', workerId }, draft).catch((error) => void vscode.window.showErrorMessage(`Could not start a chat: ${message(error)}`));

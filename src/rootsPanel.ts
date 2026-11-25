@@ -79,13 +79,20 @@ export class RootsPanels implements vscode.Disposable {
     const service = serveRoots({
       connection: () => this.workers.get(workerId)?.connection,
       send: (message) => void panel.webview.postMessage(message),
-      label: this.label(workerId),
+      label: () => this.label(workerId),
       chats: () => this.chatList(workerId),
       openChat: (key) => void this.chats.open(workerId, key).catch((error) => void vscode.window.showErrorMessage(String(error))),
       newChat: (prompt) => this.newChat(workerId, prompt),
       openFile: (path) => this.openFile(workerId, path)
     });
-    const changes = [this.workers.onDidChange(() => service.chatsChanged()), this.chats.onDidChangeStatus(() => service.chatsChanged())];
+    const changes = [
+      // The worker's project may come after the tab, e.g. one restored after a reload.
+      this.workers.onDidChange(() => {
+        panel.title = this.title(workerId);
+        service.chatsChanged();
+      }),
+      this.chats.onDidChangeStatus(() => service.chatsChanged())
+    ];
     panel.webview.onDidReceiveMessage((message: RootsWebviewMessage) => service.receive(message));
     panel.onDidDispose(() => {
       service.dispose();

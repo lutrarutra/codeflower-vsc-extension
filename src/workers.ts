@@ -71,6 +71,8 @@ export interface WorkerRouter {
   commands(workerId: string, sessionKey: string, commands: AgentCommand[]): void;
   /** The project's batch jobs changed (codeflower-job): one was submitted, or changed state. */
   jobs(workerId: string, jobs: BatchJob[]): void;
+  /** An agent asks to show the worker's map of ideas (codeflower-roots open), on `idea` when given. */
+  roots(workerId: string, idea?: number): void;
   config(workerId: string, sessionKey: string, options: SessionConfigOption[]): void;
   elicitUrl(workerId: string, request: UrlElicitation): Promise<'accept' | 'decline'>;
   elicitationComplete(workerId: string, elicitationId: string): void;
@@ -316,6 +318,7 @@ export class WorkerManager implements vscode.Disposable {
             elicitUrl: (request) => this.router.elicitUrl(entry.id, request),
             elicitationComplete: (elicitationId) => this.router.elicitationComplete(entry.id, elicitationId),
             show: (request) => this.router.show(entry.id, request),
+            roots: (idea) => this.router.roots(entry.id, idea),
             terminals: (terminals) => this.router.terminals(entry.id, terminals),
             terminalOutput: (terminalId, data, replayed) => this.router.terminalOutput(terminalId, data, replayed),
             terminalExit: (terminalId, exitCode) => this.router.terminalExit(terminalId, exitCode),
