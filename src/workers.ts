@@ -314,6 +314,8 @@ export class WorkerManager implements vscode.Disposable {
                 this.changed.fire();
               }
             },
+            // A chat was forked, or an agent started one: listed at once, not at the next poll.
+            sessions: () => void this.refresh(entry.id),
             config: (key, options) => this.router.config(entry.id, key, options),
             elicitUrl: (request) => this.router.elicitUrl(entry.id, request),
             elicitationComplete: (elicitationId) => this.router.elicitationComplete(entry.id, elicitationId),

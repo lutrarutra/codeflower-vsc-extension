@@ -86,6 +86,7 @@ class ChatPanel {
   private readonly listChats: () => void;
   private readonly openChat: (key: string) => void;
   private readonly newChat: () => void;
+  private readonly forkChat: (beforeEntry?: number) => void;
   private readonly openCommand: (command: AgentCommand) => void;
   private readonly openShell: () => void;
   private readonly openBrowser: () => void;
@@ -143,6 +144,8 @@ class ChatPanel {
     onOpenChat: (key: string) => void;
     /** Starts a new chat in the sandbox with this chat's agent, in a new tab. */
     onNewChat: () => void;
+    /** Forks the chat, before the user's message at transcript entry `beforeEntry` or all of it, in a new tab. */
+    onForkChat: (beforeEntry?: number) => void;
     /** Shows a command the chat's agent runs, read-only. */
     onOpenCommand: (command: AgentCommand) => void;
     /** Opens a shell in the chat's sandbox, in VS Code's terminal panel. */
@@ -178,6 +181,7 @@ class ChatPanel {
     this.listChats = options.onListChats;
     this.openChat = options.onOpenChat;
     this.newChat = options.onNewChat;
+    this.forkChat = options.onForkChat;
     this.openCommand = options.onOpenCommand;
     this.openShell = options.onOpenShell;
     this.openBrowser = options.onOpenBrowser;
@@ -332,6 +336,12 @@ class ChatPanel {
       return;
     }
     void this.panel.webview.postMessage(message);
+  }
+
+  /** What the chat shows of forks, when it changed (the worker's chats are listed every few seconds). */
+  setForking(update: Pick<ChatState, 'fork' | 'origin'>): void {
+    if (this.state.fork === update.fork && JSON.stringify(this.state.origin) === JSON.stringify(update.origin)) return;
+    this.setState(update);
   }
 
   setState(update: Partial<ChatState>): void {
@@ -509,6 +519,9 @@ class ChatPanel {
       case 'newChat':
         this.newChat();
         break;
+      case 'forkChat':
+        this.forkChat(message.beforeEntry);
+        break;
       case 'openShell':
         this.openShell();
         break;
@@ -620,6 +633,9 @@ export class ChatPanels {
     this.workers = workers;
     this.signIn = signIn;
     this.memento = memento;
+    workers.onDidChange(() => {
+      for (const workerId of new Set([...this.panels.values()].map((panel) => panel.workerId))) this.sessionsChanged(workerId);
+    });
   }
 
   /** Chats show every step unless the user folds them; the choice holds for every chat. */
@@ -762,6 +778,10 @@ export class ChatPanels {
       onListChats: () => void this.listChats(workerId, panel),
       onOpenChat: (target) => void this.open(workerId, target).catch((error) => panel.reportError(error)),
       onNewChat: () => void this.newSession(workerId, agentOfKey(panel.key)).catch((error) => panel.reportError(error)),
+      onForkChat: (beforeEntry) =>
+        void this.fork(workerId, panel.key, beforeEntry).catch((error) =>
+          panel.notice('error', `Could not fork the chat: ${error instanceof Error ? error.message : String(error)}`)
+        ),
       onOpenCommand: (command) => this.openCommand(workerId, command, agent.name ?? agentOfKey(panel.key)),
       onOpenShell: () => this.openShell(workerId, workerId),
       onOpenBrowser: () => this.openBrowser(workerId, panel.key),
@@ -771,10 +791,47 @@ export class ChatPanels {
       ...(subagent ? { subagent: this.subagentState(workerId, subagent) } : {})
     });
     this.panels.set(this.id(workerId, key), panel);
+    panel.setState(this.forking(workerId, key));
     this.showUsage(panel);
     this.workers.refreshUsage(workerId, agent.id);
     panel.post({ type: 'subagentSettings', state: worker?.subagentSettings[agent.id] ?? null });
     return panel;
+  }
+
+  /** Whether the chat forks (not a subagent's, on a worker that forks chats), and where it came from. */
+  private forking(workerId: string, key: string): Pick<ChatState, 'fork' | 'origin'> {
+    const worker = this.workers.get(workerId);
+    const sessions = worker?.sessions ?? [];
+    const titleOf = (other: string) => sessions.find((session) => session.key === other)?.title ?? other;
+    const session = sessions.find((candidate) => candidate.key === key);
+    const origin = session?.origin;
+    return {
+      // Only the chats the worker lists: a subagent's is not among them.
+      fork: worker?.status?.forkChats === true && session !== undefined,
+      origin: origin
+        ? {
+            kind: origin.kind,
+            key: origin.from,
+            title: titleOf(origin.from),
+            ...(origin.kind === 'fork' && origin.before ? { before: origin.before } : {}),
+            ...(origin.kind === 'fork' && origin.by && origin.by !== origin.from ? { by: { key: origin.by, title: titleOf(origin.by) } } : {})
+          }
+        : undefined
+    };
+  }
+
+  /** The worker's chats were listed again: what the open chats show of forks follows. */
+  sessionsChanged(workerId: string): void {
+    for (const panel of this.panels.values()) if (panel.workerId === workerId) panel.setForking(this.forking(workerId, panel.key));
+  }
+
+  /** Forks a chat (before the user's message at entry `beforeEntry`, or all of it) and shows the fork, that message ready to send again. */
+  async fork(workerId: string, key: string, beforeEntry?: number): Promise<void> {
+    const connection = this.workers.require(workerId);
+    const forked = await connection.forkSession(key, beforeEntry === undefined ? {} : { beforeEntry });
+    await this.workers.refresh(workerId);
+    await this.open(workerId, forked.key);
+    if (forked.draft) this.panels.get(this.id(workerId, forked.key))?.post({ type: 'draft', text: forked.draft });
   }
 
   /** The worker's chats for a chat's header: as known now, then again once listed afresh. */
