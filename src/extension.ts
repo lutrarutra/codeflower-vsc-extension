@@ -134,6 +134,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const plugins = new PluginsPanels(context.extensionUri, workers);
   const roots = new RootsPanels(context.extensionUri, workers, panels!);
   rootsPanels = roots;
+  panels!.openRoots = (workerId) => roots.open(workerId);
   roots.openFile = (workerId, path) => void previews!.openPath(workerId, path, undefined);
   roots.newChat = (workerId, draft) =>
     void newSession({ kind: 'worker', workerId }, draft).catch((error) => void vscode.window.showErrorMessage(`Could not start a chat: ${message(error)}`));

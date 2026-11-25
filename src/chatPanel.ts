@@ -91,6 +91,7 @@ class ChatPanel {
   private readonly openCommand: (command: AgentCommand) => void;
   private readonly openShell: () => void;
   private readonly openBrowser: () => void;
+  private readonly openRoots: () => void;
   private readonly extensionUri: vscode.Uri;
   private status: SessionStatus | undefined;
   private readonly onStatus: () => void;
@@ -153,6 +154,8 @@ class ChatPanel {
     onOpenShell: () => void;
     /** Shows the chat's browser beside it. */
     onOpenBrowser: () => void;
+    /** Shows the sandbox's map of ideas: its tab in front, or a new one. */
+    onOpenRoots: () => void;
     /** The chat is open on another worker: ask it to let go (Take over). */
     onTakeOver: () => void;
     /** Opening the chat found it open on another worker. */
@@ -186,6 +189,7 @@ class ChatPanel {
     this.openCommand = options.onOpenCommand;
     this.openShell = options.onOpenShell;
     this.openBrowser = options.onOpenBrowser;
+    this.openRoots = options.onOpenRoots;
     if (this.state.autoApprove !== undefined) {
       this.workers.get(this.workerId)?.connection?.setAutoApprove(this.key, this.state.autoApprove);
     }
@@ -529,6 +533,9 @@ class ChatPanel {
       case 'openBrowser':
         this.openBrowser();
         break;
+      case 'openRoots':
+        this.openRoots();
+        break;
       case 'openCommand': {
         const command = this.state.commands?.find((candidate) => candidate.commandId === message.commandId);
         if (command) this.openCommand(command);
@@ -634,6 +641,8 @@ export class ChatPanels {
   openShell: (workerId: string, sandboxName: string) => void = () => {};
   /** Shows a chat's browser; set once the browser panels exist. */
   openBrowser: (workerId: string, key: string) => void = () => {};
+  /** Shows the worker's map of ideas; set once the Roots panels exist. */
+  openRoots: (workerId: string) => void = () => {};
   /** What a chat's header shows of its browser; set once the browser panels exist. */
   browserOf: (workerId: string, key: string) => ChatState['browser'] = () => undefined;
 
@@ -802,6 +811,13 @@ export class ChatPanels {
       onOpenCommand: (command) => this.openCommand(workerId, command, agent.name ?? agentOfKey(panel.key)),
       onOpenShell: () => this.openShell(workerId, workerId),
       onOpenBrowser: () => this.openBrowser(workerId, panel.key),
+      onOpenRoots: () => {
+        try {
+          this.openRoots(workerId);
+        } catch (error) {
+          panel.reportError(error);
+        }
+      },
       onTakeOver: () => void this.takeOver(panel),
       onLeaseConflict: () => this.leaseConflict(panel),
       browser: this.browserOf(workerId, key),
