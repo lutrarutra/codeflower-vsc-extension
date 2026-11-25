@@ -3,6 +3,7 @@
 !dist/extension.cjs
 !webview/dist/**
 !media/**
+media/teaser-*.png
 !package.json
 !README.md
 !LICENSE

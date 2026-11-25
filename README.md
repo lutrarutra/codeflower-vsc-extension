@@ -24,6 +24,13 @@ The VS Code extension of code flower. It connects to code flower workers (sandbo
 [app](https://github.com/lutrarutra/codeflower-app)), lists them with their sessions in the sidebar,
 and opens a chat per session, with the agent's reports and files beside it.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="media/teaser-dark.png">
+    <img src="media/teaser-light.png" width="900" alt="code flower: a chat with an agent in a sandbox, the Roots map of ideas, and a storyteller report">
+  </picture>
+</p>
+
 ## Install
 
 Download `codeflower-<version>.vsix` from the
