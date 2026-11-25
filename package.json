@@ -43,7 +43,8 @@
     "onWebviewPanel:codeflower.preview",
     "onWebviewPanel:codeflower.report",
     "onWebviewPanel:codeflower.browser",
-    "onWebviewPanel:codeflower.plugins"
+    "onWebviewPanel:codeflower.plugins",
+    "onWebviewPanel:codeflower.roots"
   ],
   "contributes": {
     "configuration": {
@@ -115,6 +116,12 @@
         "title": "Plugins…",
         "category": "code flower",
         "icon": "$(extensions)"
+      },
+      {
+        "command": "codeflower.roots",
+        "title": "Roots: map of ideas",
+        "category": "code flower",
+        "icon": "$(type-hierarchy)"
       },
       {
         "command": "codeflower.reconnectWorker",
@@ -195,7 +202,7 @@
         {
           "command": "codeflower.removeWorker",
           "when": "view == codeflower.workers && viewItem =~ /^worker/",
-          "group": "inline@3"
+          "group": "inline@4"
         },
         {
           "command": "codeflower.reconnectWorker",
@@ -216,6 +223,16 @@
           "command": "codeflower.plugins",
           "when": "view == codeflower.workers && viewItem =~ /^worker\\.connected/",
           "group": "worker@2"
+        },
+        {
+          "command": "codeflower.roots",
+          "when": "view == codeflower.workers && viewItem =~ /^worker\\.connected/",
+          "group": "inline@3"
+        },
+        {
+          "command": "codeflower.roots",
+          "when": "view == codeflower.workers && viewItem =~ /^worker\\.connected/",
+          "group": "worker@3"
         },
         {
           "command": "codeflower.newSession",
@@ -284,6 +301,10 @@
         },
         {
           "command": "codeflower.plugins",
+          "when": "false"
+        },
+        {
+          "command": "codeflower.roots",
           "when": "false"
         },
         {

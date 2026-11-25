@@ -7,6 +7,7 @@ import { pastedLine } from './pastedLine.ts';
 import { ChatPanels } from './chatPanel.ts';
 import { followDevWorker } from './devWorker.ts';
 import { PluginsPanels } from './pluginsPanel.ts';
+import { RootsPanels } from './rootsPanel.ts';
 import { PreviewPanels } from './previewPanel.ts';
 import { BrowserPanels, chatBrowser } from './browserPanel.ts';
 import { SignIn } from './signIn.ts';
@@ -98,8 +99,8 @@ export function activate(context: vscode.ExtensionContext): void {
     const first = context.globalState.get<string>(`codeflower.newChatAgent.${node.workerId}`);
     return (await pickAgent(worker?.agents ?? [], { title, first, only }))?.id;
   };
-  /** A new chat with the agent the node names, or the one the user picks (the one used last first). */
-  const newSession = async (node: TreeNode) => {
+  /** A new chat with the agent the node names, or the one the user picks (the one used last first); `draft`: its first message. */
+  const newSession = async (node: TreeNode, draft?: string) => {
     const agent = await agentOf(node, 'New session with');
     if (!agent) return;
     void context.globalState.update(`codeflower.newChatAgent.${node.workerId}`, agent);
@@ -107,7 +108,7 @@ export function activate(context: vscode.ExtensionContext): void {
       await runSignIn(node.workerId, agent);
       return;
     }
-    await panels!.newSession(node.workerId, agent);
+    await panels!.newSession(node.workerId, agent, draft);
   };
   panels = new ChatPanels(context.extensionUri, workers, runSignIn, context.globalState);
   previews = new PreviewPanels(context.extensionUri, workers, panels);
@@ -123,6 +124,10 @@ export function activate(context: vscode.ExtensionContext): void {
   browsers.chatColumn = (workerId, key) => panels!.column(workerId, key);
   const tree = new WorkerTree(workers, panels);
   const plugins = new PluginsPanels(context.extensionUri, workers);
+  const roots = new RootsPanels(context.extensionUri, workers, panels!);
+  roots.openFile = (workerId, path) => void previews!.openPath(workerId, path, undefined);
+  roots.newChat = (workerId, draft) =>
+    void newSession({ kind: 'worker', workerId }, draft).catch((error) => void vscode.window.showErrorMessage(`Could not start a chat: ${message(error)}`));
 
   // The workers of the last session, and in development the dev worker: restored tabs wait for them.
   const restored: Promise<unknown>[] = [workers.restore()];
@@ -140,6 +145,7 @@ export function activate(context: vscode.ExtensionContext): void {
   tabs.register('codeflower.report', 'report', (panel, tab) => previews!.restoreReport(panel, tab));
   tabs.register('codeflower.browser', 'browser', (panel, tab) => browsers!.restore(panel, tab));
   tabs.register('codeflower.plugins', 'plugins', (panel, tab) => plugins.restore(panel, tab));
+  tabs.register('codeflower.roots', 'roots', (panel, tab) => roots.restore(panel, tab));
 
   const guarded =
     <T extends unknown[]>(action: (...args: T) => Promise<unknown> | unknown) =>
@@ -197,6 +203,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     workers,
     plugins,
+    roots,
     tabs,
     attentionStatusBar(panels),
     vscode.window.createTreeView('codeflower.workers', { treeDataProvider: tree, showCollapseAll: true }),
@@ -300,7 +307,11 @@ export function activate(context: vscode.ExtensionContext): void {
         if (agent) plugins.open(node.workerId, agent);
       })
     ),
-    vscode.commands.registerCommand('codeflower.newSession', guarded(newSession)),
+    vscode.commands.registerCommand(
+      'codeflower.roots',
+      guarded((node: TreeNode) => roots.open(node.workerId))
+    ),
+    vscode.commands.registerCommand('codeflower.newSession', guarded((node: TreeNode) => newSession(node))),
     // A shell in a sandbox, from its row in the sidebar or the command palette (the user picks among several).
     vscode.commands.registerCommand(
       'codeflower.openShell',

@@ -1,6 +1,7 @@
 import { mount } from 'svelte';
 import App from 'codeflower-ui/chat/App.svelte';
 import Plugins from 'codeflower-ui/chat/Plugins.svelte';
+import Roots from 'codeflower-ui/chat/Roots.svelte';
 import BrowserPanel from 'codeflower-ui/chat/browser/BrowserPanel.svelte';
 import Preview from 'codeflower-ui/chat/Preview.svelte';
 import { postMessageHost } from 'codeflower-ui/chat/lib/host.ts';
@@ -42,6 +43,8 @@ if (document.body.dataset.view === 'preview') {
   mount(Preview, { target, props: { host, reportFrame: 'webview' } });
 } else if (document.body.dataset.view === 'plugins') {
   mount(Plugins, { target, props: { host } });
+} else if (document.body.dataset.view === 'roots') {
+  mount(Roots, { target, props: { host } });
 } else if (document.body.dataset.view === 'browser') {
   mount(BrowserPanel, { target, props: { host } });
 } else if (document.body.dataset.view === 'restore') {

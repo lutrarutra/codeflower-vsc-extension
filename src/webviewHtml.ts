@@ -1,12 +1,12 @@
 // The HTML of code flower's webviews: one bundle, which renders the view named
-// on <body>: a chat, a file preview, an agent's plugins, a chat's browser, or a
+// on <body>: a chat, a file preview, an agent's plugins, a chat's browser, a sandbox's map of ideas, or a
 // restored tab waiting for its sandbox. Each page keeps what its tab is
 // (tabState.ts) in the webview's state, so VS Code can restore the tab.
 import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
 import { scriptJson, type TabState } from './tabState.ts';
 
-export type WebviewView = 'chat' | 'preview' | 'plugins' | 'browser' | 'restore';
+export type WebviewView = 'chat' | 'preview' | 'plugins' | 'browser' | 'roots' | 'restore';
 
 /** The bundle's folder: the only local files code flower's webviews may load. */
 export function webviewAssets(extensionUri: vscode.Uri): vscode.Uri {

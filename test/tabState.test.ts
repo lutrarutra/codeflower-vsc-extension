@@ -11,7 +11,8 @@ test('each kind of tab comes back as it was kept', () => {
     { view: 'preview', workerId: WORKER, path: '/data/output/report.html', title: 'report.html', interactive: true },
     { view: 'report', workerId: WORKER, path: '/data/output/report.html', title: 'report.html' },
     { view: 'browser', workerId: WORKER, key: 'claude:abc' },
-    { view: 'plugins', workerId: WORKER, agent: 'claude' }
+    { view: 'plugins', workerId: WORKER, agent: 'claude' },
+    { view: 'roots', workerId: WORKER }
   ] as const;
   for (const tab of tabs) assert.deepEqual(parseTabState(tab.view, JSON.parse(JSON.stringify(tab))), tab);
 });

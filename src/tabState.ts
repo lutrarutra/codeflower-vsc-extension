@@ -10,7 +10,9 @@ export type TabState =
   /** An interactive report's own tab, from before reports ran in their preview tab. */
   | { view: 'report'; workerId: string; path: string; title: string; chatKey?: string }
   | { view: 'browser'; workerId: string; key: string }
-  | { view: 'plugins'; workerId: string; agent: string };
+  | { view: 'plugins'; workerId: string; agent: string }
+  /** A sandbox's map of ideas. */
+  | { view: 'roots'; workerId: string };
 
 export type TabView = TabState['view'];
 
@@ -59,6 +61,8 @@ export function parseTabState(view: TabView, state: unknown): TabState | undefin
       return isText(fields.key) ? { view, workerId, key: fields.key } : undefined;
     case 'plugins':
       return isText(fields.agent) ? { view, workerId, agent: fields.agent } : undefined;
+    case 'roots':
+      return { view, workerId };
   }
 }
 

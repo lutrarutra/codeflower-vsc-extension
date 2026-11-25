@@ -799,8 +799,8 @@ export class ChatPanels {
     });
   }
 
-  /** A new chat with one of the worker's agents. */
-  async newSession(workerId: string, agent: AgentName): Promise<void> {
+  /** A new chat with one of the worker's agents; `draft`: its first message, ready to send. */
+  async newSession(workerId: string, agent: AgentName, draft?: string): Promise<void> {
     const connection = this.workers.require(workerId);
     let started: AttachedSession;
     try {
@@ -827,6 +827,7 @@ export class ChatPanels {
     panel.setState({ live: true, steer: connection.canSteer(key), shells: connection.shellTerminals });
     const notice = connection.mcpNotice(key);
     if (notice) panel.notice('info', notice);
+    if (draft) panel.post({ type: 'draft', text: draft });
     void this.workers.refresh(workerId);
   }
 
