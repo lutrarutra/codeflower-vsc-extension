@@ -12,6 +12,7 @@ import type { SubagentSettingsState, SubagentSummary } from 'codeflower-ui/proto
 import type { WorkerUsage } from 'codeflower-ui/protocol/usage.ts';
 import type { AgentCommand } from 'codeflower-ui/protocol/commands.ts';
 import { jobActive, type BatchJob } from 'codeflower-ui/protocol/jobs.ts';
+import type { Watch } from 'codeflower-ui/protocol/watches.ts';
 import type { BrowserFrame, BrowserState } from 'codeflower-ui/protocol/browser.ts';
 import { parseWorkerAddress, type WorkerAddress } from 'codeflower-ui/client/address.ts';
 import {
@@ -71,6 +72,8 @@ export interface WorkerRouter {
   commands(workerId: string, sessionKey: string, commands: AgentCommand[]): void;
   /** The project's batch jobs changed (codeflower-job): one was submitted, or changed state. */
   jobs(workerId: string, jobs: BatchJob[]): void;
+  /** The project's watches changed (codeflower-watch): one started, ran, or ended. */
+  watches(workerId: string, watches: Watch[]): void;
   /** An agent asks to show the worker's map of ideas (codeflower-roots open), on `idea` when given. */
   roots(workerId: string, idea?: number): void;
   config(workerId: string, sessionKey: string, options: SessionConfigOption[]): void;
@@ -314,6 +317,7 @@ export class WorkerManager implements vscode.Disposable {
                 this.changed.fire();
               }
             },
+            watches: (watches) => this.router.watches(entry.id, watches),
             // A chat was forked, or an agent started one: listed at once, not at the next poll.
             sessions: () => void this.refresh(entry.id),
             config: (key, options) => this.router.config(entry.id, key, options),

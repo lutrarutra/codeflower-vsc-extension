@@ -48,6 +48,11 @@ export function activate(context: vscode.ExtensionContext): void {
       // A tab with a job's output says whether more is coming.
       previews?.jobsChanged(workerId);
     },
+    watches: (workerId, watches) => {
+      panels?.watches(workerId, watches);
+      // A tab with a watch's output says whether more is coming.
+      previews?.jobsChanged(workerId);
+    },
     config: (workerId, key, options) => panels?.config(workerId, key, options),
     elicitUrl: async (_workerId, request) => (signIn ? signIn.elicitUrl(request) : 'decline'),
     elicitationComplete: () => {},

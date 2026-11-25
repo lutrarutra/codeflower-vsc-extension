@@ -14,6 +14,7 @@ import type { PreviewHostMessage, PreviewState, PreviewWebviewMessage, SandboxFi
 import { feedbackAnnotations, feedbackFigure, feedbackText } from 'codeflower-ui/chat/lib/feedback.ts';
 import { isBesideReport, isStorytellerReport } from 'codeflower-ui/chat/lib/report.ts';
 import { jobActive, jobOfFile } from 'codeflower-ui/protocol/jobs.ts';
+import { watchOfFile } from 'codeflower-ui/protocol/watches.ts';
 import type { ChatPanels } from './chatPanel.ts';
 import { isFileConflict } from 'codeflower-ui/client/codeflower.ts';
 import { WORKSPACE, type ShowRequest } from 'codeflower-ui/client/workerConnection.ts';
@@ -134,6 +135,7 @@ class PreviewPanel {
   postState(): void {
     const chat = this.chatKey ? this.owner.chats.chat(this.workerId, this.chatKey) : null;
     const job = jobOfFile(this.owner.chats.jobsFor(this.workerId), this.file.path);
+    const watch = watchOfFile(this.owner.chats.watchesFor(this.workerId), this.file.path);
     const state: PreviewState = {
       file: this.file,
       data: this.data,
@@ -143,7 +145,8 @@ class PreviewPanel {
       chat: chat ?? (this.chatKey ? { title: 'the chat', busy: false } : null),
       live: !!this.owner.workers.get(this.workerId)?.connection?.connected,
       interactive: this.interactive,
-      ...(job ? { job } : {})
+      ...(job ? { job } : {}),
+      ...(watch ? { watch } : {})
     };
     this.post({ type: 'preview', state });
   }
@@ -422,7 +425,7 @@ export class PreviewPanels {
     }
   }
 
-  /** A worker's batch jobs changed: its tabs with a job's output say how the job is. */
+  /** A worker's batch jobs or watches changed: its tabs with their output say how they are. */
   jobsChanged(workerId: string): void {
     for (const panel of this.panels.values()) if (panel.workerId === workerId) panel.postState();
   }

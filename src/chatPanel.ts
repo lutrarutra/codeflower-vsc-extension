@@ -22,6 +22,7 @@ import { ChatQueue } from 'codeflower-ui/client/chatQueue.ts';
 import type { ChatUsage } from 'codeflower-ui/protocol/usage.ts';
 import type { AgentCommand } from 'codeflower-ui/protocol/commands.ts';
 import { jobsOfChat, type BatchJob } from 'codeflower-ui/protocol/jobs.ts';
+import { watchesOfChat, type Watch } from 'codeflower-ui/protocol/watches.ts';
 import {
   subagentTitle,
   withSubagent,
@@ -547,6 +548,20 @@ class ChatPanel {
           this.reportError(error);
         }
         break;
+      case 'stopWatch':
+        try {
+          await this.workers.require(this.workerId).stopWatch(message.id);
+        } catch (error) {
+          this.reportError(error);
+        }
+        break;
+      case 'checkWatch':
+        try {
+          await this.workers.require(this.workerId).checkWatch(message.id);
+        } catch (error) {
+          this.reportError(error);
+        }
+        break;
       case 'subagentSettings':
         try {
           const connection = this.workers.require(this.workerId);
@@ -597,6 +612,8 @@ export class ChatPanels {
   private readonly takingOver = new Map<ChatPanel, number>();
   /** Each worker's batch jobs as it last said; each chat shows its own. */
   private readonly jobsOf = new Map<string, BatchJob[]>();
+  /** Each worker's watches as it last said; each chat shows its own. */
+  private readonly watchesOf = new Map<string, Watch[]>();
   /** Chats open in the agent's own terminal UI (`codeflower attach`), by worker and key. */
   private readonly terminalsByWorker = new Map<string, Record<string, ChatTerminal>>();
   /** The terminal notice each panel shows, so it is posted once and cleared when the terminal goes. */
@@ -956,6 +973,7 @@ export class ChatPanels {
       void this.loadSubagents(panel);
       void this.loadCommands(panel);
       void this.loadJobs(panel);
+      void this.loadWatches(panel);
     } catch (error) {
       panel.loaded(await connection.transcriptPage(key).catch(() => EMPTY_TRANSCRIPT));
       panel.reportError(error);
@@ -1149,6 +1167,26 @@ export class ChatPanels {
     const connection = this.workers.get(panel.workerId)?.connection;
     if (!connection?.jobsFeature) return;
     this.jobs(panel.workerId, await connection.jobs());
+  }
+
+  /** A worker's watches changed: each of its chats shows its own. */
+  watches(workerId: string, watches: Watch[]): void {
+    this.watchesOf.set(workerId, watches);
+    for (const panel of this.panels.values()) {
+      if (panel.workerId === workerId) panel.setState({ watches: watchesOfChat(watches, panel.key) });
+    }
+  }
+
+  /** A worker's watches as it last said, e.g. for a tab that shows one's output. */
+  watchesFor(workerId: string): Watch[] {
+    return this.watchesOf.get(workerId) ?? [];
+  }
+
+  /** The worker's watches, for a chat that attached. */
+  private async loadWatches(panel: ChatPanel): Promise<void> {
+    const connection = this.workers.get(panel.workerId)?.connection;
+    if (!connection?.watchesFeature) return;
+    this.watches(panel.workerId, await connection.watches());
   }
 
   /** The commands a chat's agent runs, for its strip. */
