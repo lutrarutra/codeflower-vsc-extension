@@ -100,6 +100,12 @@
         "icon": "$(comment-discussion)"
       },
       {
+        "command": "codeflower.newOrchestratedSession",
+        "title": "New orchestrated session",
+        "category": "code flower",
+        "icon": "$(compass)"
+      },
+      {
         "command": "codeflower.openShell",
         "title": "Open shell in sandbox",
         "category": "code flower",
@@ -288,6 +294,11 @@
           "command": "codeflower.copyHostPath",
           "when": "view == codeflower.workers && viewItem =~ /^(file|folder)\\.host$/",
           "group": "copy@2"
+        },
+        {
+          "command": "codeflower.newOrchestratedSession",
+          "when": "view == codeflower.workers && viewItem =~ /^worker\\.connected/",
+          "group": "worker@1"
         }
       ],
       "commandPalette": [
@@ -341,6 +352,10 @@
         },
         {
           "command": "codeflower.copyHostPath",
+          "when": "false"
+        },
+        {
+          "command": "codeflower.newOrchestratedSession",
           "when": "false"
         }
       ]

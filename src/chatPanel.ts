@@ -48,13 +48,15 @@ import type { TabState } from './tabState.ts';
 import { createTabPanel, postTabState, webviewHtml } from './webviewHtml.ts';
 import type { WorkerManager } from './workers.ts';
 
-/** What the chat view asks of orchestrators, which the panels hand on to the worker. */
-type OrchestratorMessage = Extract<
-  WebviewMessage,
-  { type: 'createOrchestrator' | 'setOrchestratorAccess' | 'disconnectOrchestrator' | 'shareWithOrchestrator' }
->;
+/**
+ * What the chat view asks of orchestrators, which the panels hand on to the worker; and an action of the
+ * orchestrator's (the report) chosen in its executor's chat, which runs in the orchestrator's chat.
+ */
+type OrchestratorMessage =
+  | Extract<WebviewMessage, { type: 'setOrchestratorAccess' | 'disconnectOrchestrator' | 'shareWithOrchestrator' }>
+  | { type: 'runOrchestratorAction'; id: string };
 const ORCHESTRATOR_FAILURE: Record<OrchestratorMessage['type'], string> = {
-  createOrchestrator: 'Could not start an orchestrator',
+  runOrchestratorAction: 'Could not ask the orchestrator',
   setOrchestratorAccess: 'Could not change what the orchestrator may do',
   disconnectOrchestrator: 'Could not disconnect the orchestrator',
   shareWithOrchestrator: 'Could not share it with the orchestrator'
@@ -295,6 +297,15 @@ class ChatPanel {
     const action = this.state.actions?.find((candidate) => candidate.id === id);
     if (!action) {
       this.notice('error', 'This action is unavailable on this worker. Reconnect to an updated sandbox.');
+      return;
+    }
+    // The orchestrator's to do (the report): in its chat, or from its executor's, in its chat.
+    if (action.orchestratorPrompt !== undefined && this.state.orchestrator) {
+      this.prompts.action({ ...action, prompt: action.orchestratorPrompt });
+      return;
+    }
+    if (action.orchestratorPrompt !== undefined && this.state.executor && !this.state.executor.disconnected) {
+      this.orchestrate({ type: 'runOrchestratorAction', id: action.id });
       return;
     }
     this.prompts.action(action);
@@ -544,7 +555,6 @@ class ChatPanel {
       case 'forkChat':
         this.forkChat(message.beforeEntry);
         break;
-      case 'createOrchestrator':
       case 'setOrchestratorAccess':
       case 'disconnectOrchestrator':
       case 'shareWithOrchestrator':
@@ -894,16 +904,10 @@ export class ChatPanels {
   /** Each worker's orchestrators as it last said; each chat shows those directing it, or the chat it directs. */
   private readonly orchestratorsOf = new Map<string, Orchestrator[]>();
 
-  /** The orchestrators directing a chat, or the one it is, and whether one can start on it. */
-  private orchestrating(workerId: string, key: string): Pick<ChatState, 'orchestrators' | 'orchestrator' | 'orchestrate'> {
-    const worker = this.workers.get(workerId);
+  /** The orchestrators directing a chat, the one it is, and, for an executor, its line. */
+  private orchestrating(workerId: string, key: string): Pick<ChatState, 'orchestrators' | 'orchestrator' | 'executor'> {
     const known = orchestration(this.orchestratorsOf.get(workerId) ?? [], key);
-    const session = worker?.sessions?.find((candidate) => candidate.key === key);
-    return {
-      ...known,
-      // Only the chats the worker lists: a subagent's is not among them.
-      orchestrate: Boolean(worker?.connection?.orchestratorAgents.length) && session !== undefined && session.role !== 'orchestrator' && !known.orchestrator
-    };
+    return { orchestrators: known.orchestrators, orchestrator: known.orchestrator, executor: known.executor };
   }
 
   /** A worker's orchestrators changed. */
@@ -921,11 +925,9 @@ export class ChatPanels {
   private async orchestrator(workerId: string, panel: ChatPanel, message: OrchestratorMessage): Promise<void> {
     const connection = this.workers.require(workerId);
     switch (message.type) {
-      case 'createOrchestrator': {
-        const created = await connection.createOrchestrator(panel.key);
-        await this.workers.refresh(workerId);
-        await this.loadOrchestrators(workerId);
-        await this.open(workerId, created.key);
+      case 'runOrchestratorAction': {
+        const { key } = await connection.runOrchestratorAction(panel.key, message.id);
+        await this.open(workerId, key);
         return;
       }
       case 'setOrchestratorAccess': {
@@ -938,6 +940,15 @@ export class ChatPanels {
       case 'shareWithOrchestrator':
         return connection.shareWithOrchestrator(panel.key, message.path);
     }
+  }
+
+  /** Makes an orchestrated pair (an executor of `agent`, a Claude orchestrator directing it) and shows the orchestrator's chat. */
+  async newOrchestrated(workerId: string, agent: string, title?: string): Promise<void> {
+    const connection = this.workers.require(workerId);
+    const created = await connection.createOrchestrator({ agent }, title ? { title } : {});
+    await this.workers.refresh(workerId);
+    await this.loadOrchestrators(workerId);
+    await this.open(workerId, created.key);
   }
 
   /** Forks a chat (before the user's message at entry `beforeEntry`, or all of it) and shows the fork, that message ready to send again. */
@@ -966,7 +977,8 @@ export class ChatPanels {
         agent: this.presentation(workerId, session.key),
         updatedAt: session.updatedAt,
         ...(status ? { status } : {}),
-        ...(session.key === current ? { current: true } : {})
+        ...(session.key === current ? { current: true } : {}),
+        ...(session.role ? { role: session.role } : {})
       };
     });
   }

@@ -323,6 +323,25 @@ export function activate(context: vscode.ExtensionContext): void {
       guarded((node: TreeNode) => roots.open(node.workerId))
     ),
     vscode.commands.registerCommand('codeflower.newSession', guarded((node: TreeNode) => newSession(node))),
+    // An orchestrated pair: the agent picked is the executor, a Claude orchestrator directs it.
+    vscode.commands.registerCommand(
+      'codeflower.newOrchestratedSession',
+      guarded(async (node: TreeNode) => {
+        if (!workers.get(node.workerId)?.connection?.orchestratorAgents.includes('claude')) {
+          void vscode.window.showInformationMessage('This sandbox cannot make orchestrated chats: update it, and sign Claude Code in.');
+          return;
+        }
+        const agent = await agentOf(node, 'Executor (it works with the data, one step at a time)');
+        if (!agent) return;
+        const title = await vscode.window.showInputBox({
+          title: 'New orchestrated session',
+          prompt: 'A title for the pair (optional): a Claude orchestrator plans and checks; the executor works with the data',
+          placeHolder: 'e.g. Survival analysis'
+        });
+        if (title === undefined) return;
+        await panels!.newOrchestrated(node.workerId, agent, title.trim() || undefined);
+      })
+    ),
     // A shell in a sandbox, from its row in the sidebar or the command palette (the user picks among several).
     vscode.commands.registerCommand(
       'codeflower.openShell',
