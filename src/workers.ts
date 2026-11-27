@@ -13,6 +13,7 @@ import type { WorkerUsage } from 'codeflower-ui/protocol/usage.ts';
 import type { AgentCommand } from 'codeflower-ui/protocol/commands.ts';
 import { jobActive, type BatchJob } from 'codeflower-ui/protocol/jobs.ts';
 import type { Watch } from 'codeflower-ui/protocol/watches.ts';
+import type { Orchestrator } from 'codeflower-ui/protocol/orchestrators.ts';
 import type { BrowserFrame, BrowserState } from 'codeflower-ui/protocol/browser.ts';
 import { parseWorkerAddress, type WorkerAddress } from 'codeflower-ui/client/address.ts';
 import {
@@ -74,6 +75,8 @@ export interface WorkerRouter {
   jobs(workerId: string, jobs: BatchJob[]): void;
   /** The project's watches changed (codeflower-watch): one started, ran, or ended. */
   watches(workerId: string, watches: Watch[]): void;
+  /** The project's orchestrators changed: one started or was disconnected, its access, its exchange. */
+  orchestrators?(workerId: string, orchestrators: Orchestrator[]): void;
   /** An agent asks to show the worker's map of ideas (codeflower-roots open), on `idea` when given. */
   roots(workerId: string, idea?: number): void;
   config(workerId: string, sessionKey: string, options: SessionConfigOption[]): void;
@@ -318,6 +321,7 @@ export class WorkerManager implements vscode.Disposable {
               }
             },
             watches: (watches) => this.router.watches(entry.id, watches),
+            orchestrators: (orchestrators) => this.router.orchestrators?.(entry.id, orchestrators),
             // A chat was forked, or an agent started one: listed at once, not at the next poll.
             sessions: () => void this.refresh(entry.id),
             config: (key, options) => this.router.config(entry.id, key, options),

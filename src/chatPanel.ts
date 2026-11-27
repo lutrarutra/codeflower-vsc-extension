@@ -23,6 +23,7 @@ import type { ChatUsage } from 'codeflower-ui/protocol/usage.ts';
 import type { AgentCommand } from 'codeflower-ui/protocol/commands.ts';
 import { jobsOfChat, type BatchJob } from 'codeflower-ui/protocol/jobs.ts';
 import { watchesOfChat, type Watch } from 'codeflower-ui/protocol/watches.ts';
+import { orchestration, type Orchestrator } from 'codeflower-ui/protocol/orchestrators.ts';
 import {
   subagentTitle,
   withSubagent,
@@ -46,6 +47,18 @@ import {
 import type { TabState } from './tabState.ts';
 import { createTabPanel, postTabState, webviewHtml } from './webviewHtml.ts';
 import type { WorkerManager } from './workers.ts';
+
+/** What the chat view asks of orchestrators, which the panels hand on to the worker. */
+type OrchestratorMessage = Extract<
+  WebviewMessage,
+  { type: 'createOrchestrator' | 'setOrchestratorAccess' | 'disconnectOrchestrator' | 'shareWithOrchestrator' }
+>;
+const ORCHESTRATOR_FAILURE: Record<OrchestratorMessage['type'], string> = {
+  createOrchestrator: 'Could not start an orchestrator',
+  setOrchestratorAccess: 'Could not change what the orchestrator may do',
+  disconnectOrchestrator: 'Could not disconnect the orchestrator',
+  shareWithOrchestrator: 'Could not share it with the orchestrator'
+};
 
 const LEASE_CONFLICT = -32010;
 // A chat open on another worker tries to open here again this often, so it does once that worker lets go of it;
@@ -88,6 +101,7 @@ class ChatPanel {
   private readonly openChat: (key: string) => void;
   private readonly newChat: () => void;
   private readonly forkChat: (beforeEntry?: number) => void;
+  private readonly orchestrate: (message: OrchestratorMessage) => void;
   private readonly openCommand: (command: AgentCommand) => void;
   private readonly openShell: () => void;
   private readonly openBrowser: () => void;
@@ -148,6 +162,8 @@ class ChatPanel {
     onNewChat: () => void;
     /** Forks the chat, before the user's message at transcript entry `beforeEntry` or all of it, in a new tab. */
     onForkChat: (beforeEntry?: number) => void;
+    /** Starts an orchestrator on the chat, changes or ends one, or shares a file with them. */
+    onOrchestrator: (message: OrchestratorMessage) => void;
     /** Shows a command the chat's agent runs, read-only. */
     onOpenCommand: (command: AgentCommand) => void;
     /** Opens a shell in the chat's sandbox, in VS Code's terminal panel. */
@@ -186,6 +202,7 @@ class ChatPanel {
     this.openChat = options.onOpenChat;
     this.newChat = options.onNewChat;
     this.forkChat = options.onForkChat;
+    this.orchestrate = options.onOrchestrator;
     this.openCommand = options.onOpenCommand;
     this.openShell = options.onOpenShell;
     this.openBrowser = options.onOpenBrowser;
@@ -527,6 +544,12 @@ class ChatPanel {
       case 'forkChat':
         this.forkChat(message.beforeEntry);
         break;
+      case 'createOrchestrator':
+      case 'setOrchestratorAccess':
+      case 'disconnectOrchestrator':
+      case 'shareWithOrchestrator':
+        this.orchestrate(message);
+        break;
       case 'openShell':
         this.openShell();
         break;
@@ -808,6 +831,10 @@ export class ChatPanels {
         void this.fork(workerId, panel.key, beforeEntry).catch((error) =>
           panel.notice('error', `Could not fork the chat: ${error instanceof Error ? error.message : String(error)}`)
         ),
+      onOrchestrator: (message) =>
+        void this.orchestrator(workerId, panel, message).catch((error) =>
+          panel.notice('error', `${ORCHESTRATOR_FAILURE[message.type]}: ${error instanceof Error ? error.message : String(error)}`)
+        ),
       onOpenCommand: (command) => this.openCommand(workerId, command, agent.name ?? agentOfKey(panel.key)),
       onOpenShell: () => this.openShell(workerId, workerId),
       onOpenBrowser: () => this.openBrowser(workerId, panel.key),
@@ -824,7 +851,7 @@ export class ChatPanels {
       ...(subagent ? { subagent: this.subagentState(workerId, subagent) } : {})
     });
     this.panels.set(this.id(workerId, key), panel);
-    panel.setState(this.forking(workerId, key));
+    panel.setState({ ...this.forking(workerId, key), ...this.orchestrating(workerId, key) });
     this.showUsage(panel);
     this.workers.refreshUsage(workerId, agent.id);
     panel.post({ type: 'subagentSettings', state: worker?.subagentSettings[agent.id] ?? null });
@@ -855,7 +882,62 @@ export class ChatPanels {
 
   /** The worker's chats were listed again: what the open chats show of forks follows. */
   sessionsChanged(workerId: string): void {
-    for (const panel of this.panels.values()) if (panel.workerId === workerId) panel.setForking(this.forking(workerId, panel.key));
+    for (const panel of this.panels.values()) {
+      if (panel.workerId !== workerId) continue;
+      panel.setForking(this.forking(workerId, panel.key));
+      panel.setState(this.orchestrating(workerId, panel.key));
+    }
+  }
+
+  // ---- orchestrators ----
+
+  /** Each worker's orchestrators as it last said; each chat shows those directing it, or the chat it directs. */
+  private readonly orchestratorsOf = new Map<string, Orchestrator[]>();
+
+  /** The orchestrators directing a chat, or the one it is, and whether one can start on it. */
+  private orchestrating(workerId: string, key: string): Pick<ChatState, 'orchestrators' | 'orchestrator' | 'orchestrate'> {
+    const worker = this.workers.get(workerId);
+    const known = orchestration(this.orchestratorsOf.get(workerId) ?? [], key);
+    const session = worker?.sessions?.find((candidate) => candidate.key === key);
+    return {
+      ...known,
+      // Only the chats the worker lists: a subagent's is not among them.
+      orchestrate: Boolean(worker?.connection?.orchestratorAgents.length) && session !== undefined && session.role !== 'orchestrator' && !known.orchestrator
+    };
+  }
+
+  /** A worker's orchestrators changed. */
+  orchestrators(workerId: string, orchestrators: Orchestrator[]): void {
+    this.orchestratorsOf.set(workerId, orchestrators);
+    for (const panel of this.panels.values()) if (panel.workerId === workerId) panel.setState(this.orchestrating(workerId, panel.key));
+  }
+
+  private async loadOrchestrators(workerId: string): Promise<void> {
+    const connection = this.workers.get(workerId)?.connection;
+    if (!connection?.orchestratorAgents.length) return;
+    this.orchestrators(workerId, await connection.orchestrators());
+  }
+
+  private async orchestrator(workerId: string, panel: ChatPanel, message: OrchestratorMessage): Promise<void> {
+    const connection = this.workers.require(workerId);
+    switch (message.type) {
+      case 'createOrchestrator': {
+        const created = await connection.createOrchestrator(panel.key);
+        await this.workers.refresh(workerId);
+        await this.loadOrchestrators(workerId);
+        await this.open(workerId, created.key);
+        return;
+      }
+      case 'setOrchestratorAccess': {
+        const changed = await connection.setOrchestratorAccess(message.key, message.access);
+        if (changed.restartNeeded) panel.notice('info', "The orchestrator's web access changes when its chat starts again, e.g. after its agent restarts.");
+        return;
+      }
+      case 'disconnectOrchestrator':
+        return connection.disconnectOrchestrator(message.key);
+      case 'shareWithOrchestrator':
+        return connection.shareWithOrchestrator(panel.key, message.path);
+    }
   }
 
   /** Forks a chat (before the user's message at entry `beforeEntry`, or all of it) and shows the fork, that message ready to send again. */
@@ -990,6 +1072,7 @@ export class ChatPanels {
       void this.loadCommands(panel);
       void this.loadJobs(panel);
       void this.loadWatches(panel);
+      void this.loadOrchestrators(panel.workerId);
     } catch (error) {
       panel.loaded(await connection.transcriptPage(key).catch(() => EMPTY_TRANSCRIPT));
       panel.reportError(error);
